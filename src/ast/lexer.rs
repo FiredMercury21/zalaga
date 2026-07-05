@@ -21,14 +21,14 @@ pub enum TokType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
-    line: usize,
-    idx: usize
+    pub line: usize,
+    pub idx: usize
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
-    tok_type: TokType,
-    index: Span
+    pub tok_type: TokType,
+    pub index: Span
 }
 
 fn is_key(c: &char) -> bool {
@@ -78,11 +78,13 @@ fn check_line_ws((_, line): &(usize, &str)) -> Option<usize> {
 }
 */
 
-fn tok_line(line: &str, line_idx: usize, multi_str: &mut String) -> Vec<Token> {
-    let cleaned = conv_line_ws(line);
+pub fn tokenize_code(code: &str) -> Vec<Token> {
+    let cleaned = conv_line_ws(code);
     // char_indices similar to chars().enumerate(). But UTF-8? Idk.
     let mut look = cleaned.char_indices().peekable();  
     let mut output = Vec::new();
+    let mut multi_str = String::new();
+    let mut line_idx = 0;
     use TokType::*;
 
     while let Some((idx, c)) = look.next() {
@@ -90,7 +92,7 @@ fn tok_line(line: &str, line_idx: usize, multi_str: &mut String) -> Vec<Token> {
             // Handle multi-line strings.
             if !multi_str.is_empty() {
                 if c == '"' {
-                    Str(std::mem::take(multi_str))
+                    Str(std::mem::take(&mut multi_str))
                 } else {
                     // If end of line, continue multi-line string.
                     let body = peek_while(&mut look, |c: &char| *c != '"');
@@ -98,7 +100,7 @@ fn tok_line(line: &str, line_idx: usize, multi_str: &mut String) -> Vec<Token> {
                         Some(_) => {
                             multi_str.push(c);
                             multi_str.push_str(&body);
-                            Str(std::mem::take(multi_str))
+                            Str(std::mem::take(&mut multi_str))
                         }
                         None => {
                             multi_str.push(c);
@@ -123,7 +125,8 @@ fn tok_line(line: &str, line_idx: usize, multi_str: &mut String) -> Vec<Token> {
                     '.'  => Period, 
                     '|'  => Guard,
                     '\t' => Indent,
-                    '\n' => Newline,
+                
+                    '\n' => { line_idx += 1; Newline },
 
                     // String
                     '"' => {
@@ -154,18 +157,10 @@ fn tok_line(line: &str, line_idx: usize, multi_str: &mut String) -> Vec<Token> {
                 }
         }, 
         
-        index: Span { line: line_idx, idx: idx } } )
+        index: Span { line: line_idx.clone(), idx: idx } } )
     }
 
     output
-}
-
-pub fn tokenize_code(code: &str) -> Vec<Token> {
-    // Convert each line into a vec of tokens, then flatten.
-    let mut multi_str = String::new();
-    code.split_inclusive('\n').enumerate().flat_map( 
-        |(line_idx, line)| tok_line(line, line_idx, &mut multi_str)
-    ).collect()
 }
 
 #[cfg(test)]
