@@ -166,6 +166,8 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
         index: Span { line: line_idx.clone(), idx: idx } } )
     }
 
+    output.push(Token { tok_type: Eof, index: Span { line: line_idx + 1, idx: 0 } });
+
     output
 }
 
