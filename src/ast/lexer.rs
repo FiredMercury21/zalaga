@@ -58,6 +58,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
             // Handle multi-line strings.
             if !multi_str.is_empty() {
                 if c == '"' {
+                    idx += 1;
                     Str(std::mem::take(&mut multi_str))
                 } else {
                     // If end of line, continue multi-line string.
@@ -66,11 +67,13 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                         Some(_) => {
                             multi_str.push(c);
                             multi_str.push_str(&body);
+                            idx += body.len() + 1;
                             Str(std::mem::take(&mut multi_str))
                         }
                         None => {
                             multi_str.push(c);
                             multi_str.push_str(&body);
+                            idx += body.len() + 1;
                             continue;
                         }
                     }
