@@ -1,4 +1,4 @@
-use std::iter::Peekable;
+use crate::utils::PeekExt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokType {
@@ -40,55 +40,18 @@ fn conv_line_ws(line: &str) -> String {
     let idx = line.find( |c: char| !c.is_whitespace() )
                   .unwrap_or( line.len() );
     let (indent, post) = line.split_at(idx);
-    //indent.replace("    ", "\t") + post
-    indent.replace(" ", "\t") + post  // Single-line indentation
+    indent.replace("    ", "\t") + post 
 }
-
-fn peek_while<I, F>(code: &mut Peekable<I>, pattern: F) -> String
-where 
-    I: Iterator<Item = (usize, char)>,
-    F: Fn(&char) -> bool
-{
-    let mut output = String::new();
-    while let Some((_, c)) = code.peek() {
-        if pattern(c) {
-            // We know code.next() works because we peeked. Ignore index.
-            output.push(code.next().unwrap().1);
-        } else {
-            break;
-        }
-    }
-    output
-}
-
-
-// Don't use this yet. conv_line_ws instead.
-/*
-fn check_line_ws((_, line): &(usize, &str)) -> Option<usize> {
-    // We have to use char_indices for peek_while to work properly.
-    let mut look = line.char_indices().peekable();
-    let pre = peek_while(&mut look, |c: &char| !c.is_whitespace());
-
-    if let Some(x) = pre.find('\t') {
-        if let Some(y) = pre.find(' ') {
-            // Return index of non-conforming whitespace.
-            return Some( if x > y { x } else { y } )
-        }
-    }
-    None
-}
-*/
 
 pub fn tokenize_code(code: &str) -> Vec<Token> {
-    let cleaned = conv_line_ws(code);
-    // char_indices similar to chars().enumerate(). But UTF-8? Idk.
-    let mut look = cleaned.char_indices().peekable();  
+    let look = &mut conv_line_ws(code).chars().peekable();
     let mut output = Vec::new();
     let mut multi_str = String::new();
     let mut line_idx = 0;
+    let mut idx = 0;
     use TokType::*;
 
-    while let Some((idx, c)) = look.next() {
+    while let Some(c) = look.next() {
         output.push( Token { tok_type:
             // Handle multi-line strings.
             if !multi_str.is_empty() {
@@ -96,7 +59,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     Str(std::mem::take(&mut multi_str))
                 } else {
                     // If end of line, continue multi-line string.
-                    let body = peek_while(&mut look, |c: &char| *c != '"');
+                    let body: String = look.peek_while(|c: &char| *c != '"');
                     match look.next() {
                         Some(_) => {
                             multi_str.push(c);
@@ -116,22 +79,24 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     // Early end loop
                     ' '  => continue,  
 
-                    // Stop chars
-                    '('  => LBrack,
-                    ')'  => RBrack,
-                    '{'  => LSquirl,
-                    '}'  => RSquirl, 
-                    ':'  => Colon, 
-                    ','  => Comma,
-                    '.'  => Period, 
-                    '|'  => Guard,
-                    '\t' => Indent,
+                    // Stop chars.
+                    // Surely there's a more elegant way?
+                    '('  => { idx += 1; LBrack },
+                    ')'  => { idx += 1; RBrack },
+                    '{'  => { idx += 1; LSquirl },
+                    '}'  => { idx += 1; RSquirl }, 
+                    ':'  => { idx += 1; Colon }, 
+                    ','  => { idx += 1; Comma },
+                    '.'  => { idx += 1; Period }, 
+                    '|'  => { idx += 1; Guard },
+
+                    '\t' => { idx += 4; Indent },
                 
-                    '\n' => { line_idx += 1; Newline },
+                    '\n' => { idx = 0; line_idx += 1; Newline },
 
                     // String
                     '"' => {
-                        let body = peek_while(&mut look, |c: &char| *c != '"');
+                        let body = look.peek_while(|c: &char| *c != '"');
                         // Multi-line handled above.
                         match look.next() {  
                             Some(_) => Str(body),
@@ -144,13 +109,15 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
 
                     // Number
                     c if c.is_ascii_digit() => {
-                        let num = c.to_string() + &peek_while(&mut look, |c: &char| c.is_ascii_digit());
+                        let num = c.to_string() + &look.peek_while(|c: &char| c.is_ascii_digit());
+                        idx += num.len();
                         Num(num)
                     },
 
-                    // Identifier
+                    // Identifier, or...
                     c if c.is_ascii() => {
-                        let ident = c.to_string() + &peek_while(&mut look, |c: &char| c.is_ascii() && !is_key(c));
+                        let ident = c.to_string() + &look.peek_while(|c: &char| c.is_ascii() && !is_key(c));
+                        idx += ident.len();
                         match ident.as_str() {
                             "->" => Arrow,
                             _    => Ident(ident)
