@@ -11,6 +11,7 @@ pub enum TokType {
     RSquirl,
     Colon,
     Period,
+    Arrow,
     Indent,
     Newline,
     Illegal(char),
@@ -143,12 +144,17 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
 
                     // Number
                     c if c.is_ascii_digit() => {
-                        Num(  c.to_string() + &peek_while(&mut look, |c: &char| c.is_ascii_digit()))
+                        let num = c.to_string() + &peek_while(&mut look, |c: &char| c.is_ascii_digit());
+                        Num(num)
                     },
 
                     // Identifier
                     c if c.is_ascii() => {
-                        Ident(c.to_string() + &peek_while(&mut look, |c: &char| c.is_ascii() && !is_key(c)))
+                        let ident = c.to_string() + &peek_while(&mut look, |c: &char| c.is_ascii() && !is_key(c));
+                        match ident.as_str() {
+                            "->" => Arrow,
+                            _    => Ident(ident)
+                        }
                     },
 
                     // Else
