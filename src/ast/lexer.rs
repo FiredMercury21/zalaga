@@ -10,8 +10,10 @@ pub enum TokType {
     LSquirl,
     RSquirl,
     Colon,
+    SColon,
     Period,
     Arrow,
+    Assign,
     Indent,
     Newline,
     Illegal(char),
@@ -86,9 +88,9 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     '{'  => { idx += 1; LSquirl },
                     '}'  => { idx += 1; RSquirl }, 
                     ':'  => { idx += 1; Colon }, 
+                    ';'  => { idx += 1; SColon }, 
                     ','  => { idx += 1; Comma },
                     '.'  => { idx += 1; Period }, 
-                    '|'  => { idx += 1; Guard },
 
                     '\t' => { idx += 4; Indent },
                 
@@ -118,8 +120,12 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     c if c.is_ascii() => {
                         let ident = c.to_string() + &look.peek_while(|c: &char| c.is_ascii() && !is_key(c));
                         idx += ident.len();
+                        // Some keywords could have multiple chars,
+                        // or be prefixes (e.g. '=' and '==')
                         match ident.as_str() {
                             "->" => Arrow,
+                            "="  => Assign,
+                            "|"  => Guard,
                             _    => Ident(ident)
                         }
                     },
