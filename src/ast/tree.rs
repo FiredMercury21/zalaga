@@ -2,6 +2,9 @@ use super::lexer::*;
 use super::lexer::TokType::*;
 use std::iter::Peekable;
 
+
+/*---Type Declarations---*/
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operator {
     Add,   // +
@@ -38,6 +41,13 @@ pub enum Prim {
     Arr(Box<Prim>)
 }
 
+pub enum Constant {
+    Num(i64),
+    Float(f64),
+    Bool(bool),
+    String(String),
+} 
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     Module{ name: String, root: Box<Node> },
@@ -56,6 +66,7 @@ pub enum Node {
     BinOp{  frst: Box<Node>,    op: Operator,      second: Box<Node> },
     UnOp{    val: Box<Node>,    op: Operator },
     Return{  val: Box<Node> },
+    Const{   val: Constant },
     Break,
     Continue,
 }
@@ -70,15 +81,36 @@ pub enum ParseError {
     VarNoType(Span),
     VarNoName(Span),
     BlockParseErr(Span),
-    InvalidSyntax(Span)
+    ExprParseErr(Span),
+    InvalidSyntax(Span),
     Generic,
 }
 
-fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
-    use Prim::*;
+// What we pass to every function.
+struct Cursor {
+    stream: Vec<Token>,
+    pos: usize
+}
 
-    let is_arr = |input: &str| input.starts_with('[') && input.ends_with(']');
-    let inner  = |input: &'a str| Some(input.strip_prefix('[')?.strip_suffix(']')?.trim());
+impl Iterator for Cursor {
+    type Item = Token;
+    fn next(&mut self) -> Option<Token> {
+        let ret = self.stream.get(self.pos).cloned();
+        self.pos += 1;
+        ret
+    }
+}
+
+impl Cursor {
+    fn peek(&mut self) -> Option<Token> {
+        self.stream.get(self.pos).cloned()
+    }
+}
+
+/*---Helper functions---*/
+
+fn str_to_b_op(input_str: &str) -> Option<Operator> {
+    use Operator::*;
 
     Some(match input_str {
         "+"  => Add,
@@ -95,16 +127,28 @@ fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
         "!=" => NotET, 
         "||" => Or,    
         "&&" => And,   
-        "!"  => Neg,   
-        "++" => Inc,   
-        "--" => Dec,   
 
         _ => return None
     })
 }
 
-fn str_to_op(input_str: &str) -> Option<Op> {
-    use Op::*;
+fn str_to_u_op(input_str: &str) -> Option<Operator> {
+    use Operator::*;
+
+    Some(match input_str {
+        "!"  => Neg,   
+        "++" => Inc,   
+        "--" => Dec, 
+
+        _ => return None
+    })
+}  
+
+fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
+    use Prim::*;
+        
+    let is_arr = |input: &str| input.starts_with('[') && input.ends_with(']');
+    let inner  = |input: &'a str| Some(input.strip_prefix('[')?.strip_suffix(']')?.trim());
 
     Some(match input_str {
         "char"   => Char,
@@ -126,19 +170,7 @@ fn str_to_op(input_str: &str) -> Option<Op> {
 
 pub fn is_end_key(c: &TokType) -> bool {
     use crate::ast::lexer::TokType::*;
-    match c {
-        Eof     => true,
-        Guard   => true,
-        Comma   => true,
-        RBrack  => true,
-        RSquirl => true,
-        SColon  => true,
-        Arrow   => true,
-        Indent  => true,
-        Newline => true,
-
-        _       => false
-    }
+    matches!(c, Eof, Guard, Comma, RBrack, RSquirl, SColon, Arrow, Indent, Newline)
 }
 
 macro_rules! expect_else_err {
@@ -150,9 +182,7 @@ macro_rules! expect_else_err {
     };
 }
 
-fn match_to_parse<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token> {
-    /*
+fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     let tok = code.peek();
@@ -169,26 +199,23 @@ where T: Iterator<Item = Token> {
         ident if { 
             code.next(); code.peek() == Token { tok_type: Colon, index: _ }
         } => {
-            code = &mut std::iter::once(tok).chain(code).peekable();
             parse_var_dec(code)?
         },
 
         ident if { 
             code.next(); code.peek() == Token { tok_type: Assign, index: _ }
         } => {
-            code = &mut std::iter::once(tok).chain(code).peekable();
-            parse_var_assn(code)?
+            code.pos -= 1;
+            parse_var_asn(code)?
         },
 
-        ident => parse_expr(code)?,
+        ident => parse_expr(code, 0)?,
     })
-    */
-    todo!();
 }
 
-fn parse_block<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token> 
-{
+/*---Parsers---*/
+
+fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     let mut statements = Vec::new();
@@ -209,9 +236,7 @@ where T: Iterator<Item = Token>
 }
 
 // Horrendous code. May God forgive me.
-fn parse_fn_dec<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token>
-{
+fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     // fn name(arg1: type, arg2: type) -> ret_type {  }
 
     use ParseError::*;
@@ -255,9 +280,7 @@ where T: Iterator<Item = Token>
     Ok(output)
 }
 
-fn parse_var_dec<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token>
-{
+fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     // var name: type;
     // var name: type = stuff;
 
@@ -276,7 +299,7 @@ where T: Iterator<Item = Token>
     let Some(tok) = code.next() else { return Err(Generic) };
     let expr = match tok.tok_type {
         Newline => None,
-        Assign  => Some(Box::new(parse_expr(code)?)),
+        Assign  => Some(Box::new(parse_expr(code, 0)?)),
         _ => { return Err(Generic) }
     };
 
@@ -285,9 +308,7 @@ where T: Iterator<Item = Token>
     Ok(output)
 }
 
-fn parse_fn_args<T>(code: &mut Peekable<T>) -> Result<Vec<Node>, ParseError> 
-where T: Iterator<Item = Token>
-{
+fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
     // (arg1, arg2, arg3)
 
     use ParseError::*;
@@ -310,54 +331,64 @@ where T: Iterator<Item = Token>
     Ok(args)
 }
 
-fn parse_expr<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token>
-{
+fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
     // func( {a / 2}, 3);
     // 1 + 1;
     // { func(arg1, arg2) + x } * y;
 
     // This is a tough one. Expressions can be recursive.
 
-    use crate::utils::*
-    
-    while let Some(Token { tok_type: c, index: idx }) = code.next() {
-        match c {
-            c if is_end_key(&c) => break,
+    use ParseError::*;
+    use Node::*
 
-            LSquirl => parse_block(code)?,
-            LParen  => parse_expr(code)?,
+    let origin = code.pos;  
+    let first = match code.next() {
+        Num(num) => Const(Constant::Num(num)),
+        Str(string) => Const(Constant::String(string)),
+        LParen => parse_expr(code, 0)?,
+        LBrack => { code.pos -= 1; parse_block(code)? },
 
-            Ident(name) =>  {
-                let Some(Token { tok_type: Ident(_), index: idx }) = code.peek() else {
-                    return ExprErr(idx);
-                };
-                match  {
-                LParen => parse_fn_args(code),
-                    _ => Node::Var { name: name }
-                }
-            },
-        }
-        code.next();
+        Ident(c) if str_to_u_op(c).is_some() => {
+            UnOp { val: Box::new(parse_expr(code, 0)?), op: str_to_u_op(c).unwrap() }
+        },
+
+        Ident(name) if { code.peek() == Token { tok_type: LParen, index: _ } } => {
+            FnCall { name: name, args: parse_fn_args(code)? }
+        },
+
+        Ident(name) => {
+            Var { name: name }
+        },
+
+        _ => { return Err(ExprParseErr(code.stream[code.pos - 1].index)) }
     }
 
+    match code.next() {
+        Ident(c) if str_to_b_op(c).is_some() => {
+            let op = str_to_b_op(c).unwrap();
+            if op_to_prec(op) < prec {
+                // THIS IS HARD
+                todo!();
+            } else {
+                BinOp { first: first, op: op, second: parse_expr(code, op_to_prec(c))?}
+            }
+        },
+        _ => first
+    }
+}
+
+fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
     todo!();
 }
 
-fn parse_for<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token> 
-{
+fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     todo!();
 }
 
-fn parse_while<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token>
-{
+fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
     todo!();
 }
 
-fn parse_match<T>(code: &mut Peekable<T>) -> Result<Node, ParseError> 
-where T: Iterator<Item = Token>
-{
+fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
     todo!();
 }
