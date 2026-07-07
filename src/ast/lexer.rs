@@ -46,7 +46,8 @@ fn conv_line_ws(line: &str) -> String {
 }
 
 pub fn tokenize_code(code: &str) -> Vec<Token> {
-    let look = &mut conv_line_ws(code).chars().peekable();
+    let cleaned = conv_line_ws(code);
+    let look = &mut cleaned.chars().peekable();
     let mut output = Vec::new();
     let mut multi_str = String::new();
     let mut line_idx = 0;
@@ -114,14 +115,16 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
 
                     // Number
                     c if c.is_ascii_digit() => {
-                        let num = c.to_string() + &look.peek_while(|c: &char| c.is_ascii_digit());
+                        let mut post = look.peek_while::<_, String>(|c: &char| c.is_ascii() && !is_key(c));
+                        let num = c.to_string() + &post;
                         idx += num.len();
                         Num(num)
                     },
 
                     // Identifier, or...
                     c if c.is_ascii() => {
-                        let ident = c.to_string() + &look.peek_while(|c: &char| c.is_ascii() && !is_key(c));
+                        let mut post = look.peek_while::<_, String>(|c: &char| c.is_ascii() && !is_key(c));
+                        let ident = c.to_string() + &post;
                         idx += ident.len();
                         // Some keywords could have multiple chars,
                         // or be prefixes (e.g. '=' and '==')
