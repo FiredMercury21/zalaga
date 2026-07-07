@@ -13,6 +13,7 @@ pub enum Operator {
     Div,   // /
     Exp,   // ^
     FDiv,  // //
+    Mod,   // %
     LT,    // <
     GT,    // >
     ET,    // ==
@@ -38,7 +39,8 @@ pub enum Prim {
     Bool,
     String,
     Void,
-    Arr(Box<Prim>)
+    Arr(Box<Prim>),
+    
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,12 +54,12 @@ pub enum Constant {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     Module{ name: String, root: Box<Node> },
-    FnDec{  name: String, args: Vec<Node>, ret_type: Prim, body: Box<Node> },
+    FnDec{  name: String, args: Vec<Node>, ret_type: String, body: Box<Node> },
     Block{               scope: Vec<Node> },
     FnCall{ name: String, args: Vec<Node> },
     Expr{                 expr: Box<Node> },
     VarAsn{ name: String,  val: Box<Node> },
-    VarDec{ name: String, expr: Option<Box<Node>>, var_type: Prim },
+    VarDec{ name: String, expr: Option<Box<Node>>, var_type: String },
     Var{    name: String },
     Match{  grds: Vec<Node> },
     Guard{  pred: Box<Node>,  expr: Box<Node> },
@@ -117,9 +119,10 @@ fn str_to_b_op(input_str: &str) -> Option<Operator> {
         "+"  => Add,
         "-"  => Sub, 
         "*"  => Mul,   
-        "/"  => Div,   
+        "/"  => Div,
         "^"  => Exp,   
-        "//" => FDiv,  
+        "//" => FDiv,       
+        "%"  => Mod,
         "<"  => LT,    
         ">"  => GT,    
         "==" => ET,    
@@ -154,7 +157,8 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
         Mul   => 15,   
         Div   => 15,   
         Exp   => 20,   
-        FDiv  => 15,  
+        FDiv  => 15,
+        Mod   => 15, 
         LT    => 5,    
         GT    => 5,    
         ET    => 5,    
@@ -194,7 +198,7 @@ fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
 
 fn is_end_key(c: &TokType) -> bool {
     use crate::ast::lexer::TokType::*;
-    matches!(c, Eof | Guard | Comma | RBrack | RSquirl | SColon | Arrow | Indent | Newline)
+    matches!(c, Eof | Guard | Comma | RBrack | RSquirl | SColon | Arrow | Indent | Dedent | Newline)
 }
 
 macro_rules! expect_else_err {
@@ -235,17 +239,27 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
 
 /*---Parsers---*/
 
+pub fn parse_file(code: Vec<Token>, name: &String ) -> Result<Node, ParseError> {
+    let mut cursor = Cursor { stream: code, pos: 0 };
+    let root = Box::new(parse_block(&mut cursor)?);
+
+    Ok(Node::Module {
+        name: name.clone(),
+        root: root
+    })
+}
+
 fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     let mut statements = Vec::new();
     let mut idx: usize;
 
-    expect_else_err!(code, LSquirl, idx, Generic);
+    expect_else_err!(code, Indent, idx, Generic);
 
     while let Some(tok) = code.peek() {
         match &tok.tok_type {
-            RSquirl => break,
+            Dedent => break,
             Eof => break,
             Ident(ident) => statements.push(match_to_parse(code)?),
             _ => return Err(BlockParseErr(tok.index.clone()))
@@ -270,10 +284,6 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     while let Some(Token { tok_type: Ident(arg), index: idx }) = code.next() {
         expect_else_err!(code, Colon,           idx, VarNoType(Span { line: idx.line, idx: idx.idx + arg.len() }));
         expect_else_err!(code, Ident(type_str), idx, VarNoType(Span { line: idx.line, idx: idx.idx             }));
-
-        let Some(var_type) = str_to_prim(&type_str) else { 
-            return Err(VarNoType(Span { line: idx.line, idx: idx.idx}))
-        };
         
         // Have to do it manually here. Annoying.
         let check = code.next();
@@ -284,19 +294,17 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
             break;
         };
 
-        args.push(Node::VarDec { name: arg, expr: None, var_type: var_type });
+        args.push(Node::VarDec { name: arg, expr: None, var_type: type_str.clone() });
     }
 
     expect_else_err!(code, Arrow,           idx, FnNoRetType(Span { line: idx.line, idx: idx.idx }));
-    expect_else_err!(code, Ident(type_str), idx, FnNoRetType(Span { line: idx.line, idx: idx.idx }));
-    expect_else_err!(code, LSquirl,         idx, FnNoBody(   Span { line: idx.line, idx: idx.idx }));
+    expect_else_err!(code, Ident(type_str), idx, FnNoRetType(Span { line: idx.line, idx: idx.idx }));    
+    expect_else_err!(code, Colon,           idx, FnNoBody(   Span { line: idx.line, idx: idx.idx }));
+    expect_else_err!(code, Indent,          idx, FnNoBody(   Span { line: idx.line, idx: idx.idx }));
     let fn_body = parse_block(code)?;
 
-    let Some(ret_type) = str_to_prim(&type_str) else { 
-        return Err(FnNoRetType(Span { line: idx.line, idx: idx.idx }))
-    };
     let body = Box::new(fn_body);
-    let output = Node::FnDec { name: name, args: args, ret_type: ret_type, body: body };
+    let output = Node::FnDec { name: name, args: args, ret_type: type_str.clone(), body: body };
 
     Ok(output)
 }
@@ -313,10 +321,6 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     expect_else_err!(code, Colon,           idx, VarNoType(idx));
     expect_else_err!(code, Ident(type_str), idx, VarNoType(idx));
 
-    let Some(var_type) = str_to_prim(&type_str) else { 
-        return Err(VarNoType(Span { line: idx.line, idx: idx.idx }))
-    };
-
     let Some(tok) = code.next() else { return Err(Generic) };
     let expr = match tok.tok_type {
         Newline => None,
@@ -324,7 +328,7 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         _ => return Err(Generic)
     };
 
-    let output = Node::VarDec { name: name, expr: expr, var_type: var_type };
+    let output = Node::VarDec { name: name, expr: expr, var_type: type_str.clone() };
 
     Ok(output)
 }
@@ -369,7 +373,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
         Num(num) => Const { val: Constant::Num(num.parse().unwrap()) },
         Str(string) => Const { val: Constant::String(string) },
         LBrack => parse_expr(code, 0)?,
-        LSquirl => { code.pos -= 1; parse_block(code)? },
+        Indent => { code.pos -= 1; parse_block(code)? },
 
         Ident(c) if str_to_u_op(&c).is_some() => {
             UnOp { val: Box::new(parse_expr(code, 0)?), op: str_to_u_op(&c).unwrap() }
@@ -444,8 +448,9 @@ fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), idx, Generic);
-    expect_else_err!(code, LSquirl, idx, Generic); 
+    expect_else_err!(code, Ident(tok), idx, Generic);    
+    expect_else_err!(code, Colon, idx, Generic); 
+    expect_else_err!(code, Indent, idx, Generic); 
 
     let mut guards = Vec::new();
     while let Some(Token { tok_type: Guard, index: idx }) = code.next() {   
@@ -456,7 +461,7 @@ fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
 
         let check = code.next();
         let Some( Token { tok_type: Comma, index: idx } ) = check else {
-            let Some( Token { tok_type: RSquirl, index: idx } ) = check else {
+            let Some( Token { tok_type: Dedent, index: idx } ) = check else {
                 return Err(FnBadArg(Span { line: idx.line, idx: idx.idx }));
             };
             break;
@@ -490,4 +495,20 @@ fn parse_return(code: &mut Cursor) -> Result<Node, ParseError> {
     let val = Box::new(parse_expr(code, 0)?);
 
     Ok(Node::Return { val: val })
+}
+
+/*---Tests---*/
+
+#[cfg(test)]
+mod tests {
+    use crate::ast::lexer::*;
+    use super::*;
+
+    #[test]
+    fn test_ast_gen() {
+        let code = "var j = 0\n    while i < 32 {{\nj = 324 \n}}";
+        let tokenized = tokenize_code(code);
+        println!("Nodes:\n");
+        println!("{:#?}\n", parse_file(tokenized, &"eyllo".to_string()));
+    }
 }
