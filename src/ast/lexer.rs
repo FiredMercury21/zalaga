@@ -1,5 +1,7 @@
 use crate::utils::PeekExt;
 
+/*---Types---*/
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokType {
     Eof,
@@ -15,6 +17,7 @@ pub enum TokType {
     Arrow,
     Assign,
     Indent,
+    Dedent,
     Newline,
     Illegal(char),
     Num(String),
@@ -34,6 +37,8 @@ pub struct Token {
     pub index: Span
 }
 
+/*---Helper functions---*/
+
 fn is_key(c: &char) -> bool {
     matches!(c, ' ' | '\t' | '.' | '\n' | ',' | '(' | '|' | ')' | '{' | '}' | ':' | '"')
 }
@@ -45,20 +50,24 @@ fn conv_line_ws(line: &str) -> String {
     indent.replace("    ", "\t") + post 
 }
 
+/*---Lexer---*/
+
 pub fn tokenize_code(code: &str) -> Vec<Token> {
     let cleaned = conv_line_ws(code);
     let look = &mut cleaned.chars().peekable();
     let mut output = Vec::new();
+    let mut stream = Vec::new();
     let mut multi_str = String::new();
     let mut line_idx = 0;
     let mut idx = 0;
     use TokType::*;
 
     while let Some(c) = look.next() {
-        output.push( Token { tok_type:
+        stream.push( Token { tok_type:
             // Handle multi-line strings.
             if !multi_str.is_empty() {
                 if c == '"' {
+                    line_idx += 1;
                     idx += 1;
                     Str(std::mem::take(&mut multi_str))
                 } else {
@@ -73,7 +82,8 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                         }
                         None => {
                             multi_str.push(c);
-                            multi_str.push_str(&body);
+                            multi_str.push_str(&body);                    
+                            line_idx += 1;
                             idx += body.len() + 1;
                             continue;
                         }
@@ -145,10 +155,66 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
         index: Span { line: line_idx.clone(), idx: idx } } )
     }
 
+    /* 
+        The stupid indents. They preface each line. Need to cut them down
+        to just single Indents and Dedents when needed.
+        TODO: Make first line's indents work appropriately.
+    */
+    let mut prev_indent = 0;      
+    let mut current_indent = 0;
+    let mut stream = stream.iter().peekable();
+    while let Some(&tok) = stream.peek() {
+        current_indent = 0;
+        match tok.tok_type {
+            Newline => {
+                stream.next();
+
+                while let Some(&tok) = stream.peek() {
+                    match tok.tok_type {
+                        // If more, indent
+                        Indent => { 
+                            stream.next();
+                            current_indent += 1;
+                            // If more, increment
+                            if current_indent > prev_indent {
+                                output.push(Token { tok_type: Indent, index: tok.index.clone() });
+                            }
+                        },
+                        
+                        // If a blank line
+                        Newline => {
+                            if let Some(Token { tok_type: Newline, .. }) = stream.peek() {
+                                for _ in 0..(current_indent - prev_indent) { output.pop(); };
+                                current_indent = prev_indent;
+                            }
+                        },
+
+                        _ => break
+                    }
+                }
+
+                // If less, dedent
+                if current_indent < prev_indent {
+                    for _ in 0..(prev_indent - current_indent) {
+                        output.push(Token { tok_type: Dedent, index: Span { line: tok.index.line, idx: 0 } });
+                    }
+                }
+                prev_indent = current_indent;
+            },
+
+            _ => { 
+                stream.next();
+                output.push(tok.clone()) 
+            }
+        }
+    }
+
     output.push(Token { tok_type: Eof, index: Span { line: line_idx + 1, idx: 0 } });
 
     output
 }
+
+/*---Tests---*/
 
 #[cfg(test)]
 mod tests {
