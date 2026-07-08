@@ -125,7 +125,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
 
                     // Number
                     c if c.is_ascii_digit() => {
-                        let mut post = look.peek_while::<_, String>(|c: &char| c.is_ascii() && !is_key(c));
+                        let post = look.peek_while::<_, String>(|c: &char| c.is_ascii() && !is_key(c));
                         let num = c.to_string() + &post;
                         idx += num.len();
                         Num(num)
@@ -133,7 +133,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
 
                     // Identifier, or...
                     c if c.is_ascii() => {
-                        let mut post = look.peek_while::<_, String>(|c: &char| c.is_ascii() && !is_key(c));
+                        let post = look.peek_while::<_, String>(|c: &char| c.is_ascii() && !is_key(c));
                         let ident = c.to_string() + &post;
                         idx += ident.len();
                         // Some keywords could have multiple chars,
@@ -161,10 +161,9 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
         TODO: Make first line's indents work appropriately.
     */
     let mut prev_indent = 0;      
-    let mut current_indent = 0;
     let mut stream = stream.iter().peekable();
     while let Some(&tok) = stream.peek() {
-        current_indent = 0;
+        let mut current_indent = 0;
         match tok.tok_type {
             Newline => {
                 stream.next();

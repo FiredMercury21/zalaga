@@ -1,6 +1,5 @@
 use super::lexer::*;
 use super::lexer::TokType::*;
-use std::iter::Peekable;
 
 
 /*---Type Declarations---*/
@@ -250,11 +249,11 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
         //"continue" =>
 
         // If token after ident is =
-        ident if matches!(code.stream.get(code.pos + 1), Some(Token { tok_type: Assign, .. })) => {
+        _ if matches!(code.stream.get(code.pos + 1), Some(Token { tok_type: Assign, .. })) => {
             parse_var_asn(code)?
         },
 
-        ident => parse_expr(code, 0)?,
+        _ => parse_expr(code, 0)?,
     })
 }
 
@@ -281,7 +280,7 @@ fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
         match &tok.tok_type {
             Dedent => break,
             Eof => break,
-            Ident(ident) => statements.push(match_to_parse(code)?),
+            Ident(_) => statements.push(match_to_parse(code)?),
             _ => return Err(BlockParseErr(tok.index.clone()))
         }
     }
