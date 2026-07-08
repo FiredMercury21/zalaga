@@ -1,0 +1,28 @@
+fn quicksort(arr: int_vec) -> int_vec:
+    var output: int_vec = to_vec([])
+
+    var pivot = {
+        if arr[0]:
+            arr[0]
+        else: 
+            return output
+    }
+
+    var lesser:  int_vec = to_vec([])
+    var greater: int_vec = to_vec([])   
+    var equal:   int_vec = to_vec([])
+
+    for (var i = 1; i < arr.len(); ++i):
+        var elem = arr[i]
+        if elem < pivot:
+            lesser.push(elem)
+        elif elem > pivot:
+            greater.push(elem)
+        else:
+            equal.push(elem)
+
+    return quicksort(lesser) + equal + quicksort(greater)
+
+fn main():
+    arr = to_vec([12, 15, 43, 21, -21])
+    quicksort(arr)
