@@ -245,6 +245,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
         "for"    => parse_for(code)?,
         "while"  => parse_while(code)?,
         "return" => parse_return(code)?,
+        "match"  => parse_match(code)?,
         //"break"  => 
         //"continue" =>
 
