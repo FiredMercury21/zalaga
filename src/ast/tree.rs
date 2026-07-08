@@ -63,7 +63,7 @@ pub enum Node {
     Var{    name: String },
     Match{  grds: Vec<Node> },
     Guard{  pred: Box<Node>,  expr: Box<Node> },
-    For{    pred: Box<Node>, block: Box<Node> },
+    For{    init: Box<Node>,  pred: Box<Node>, then: Box<Node>, block: Box<Node> },
     While{  pred: Box<Node>, block: Box<Node> },
     If{     then: Box<Node>,  expr: Box<Node>, else_block: Box<Node> },
     BinOp{ first: Box<Node>,    op: Operator,      second: Box<Node> },
@@ -86,10 +86,14 @@ pub enum ParseError {
     BlockParseErr(Span),
     ExprParseErr(Span),
     InvalidSyntax(Span),
+    EmptyFile,
     Generic,
 }
 
+
 // What we pass to every function.
+// I wanted to use an iterator but there's a
+// couple times we need to go back.
 struct Cursor {
     stream: Vec<Token>,
     pos: usize
@@ -108,10 +112,18 @@ impl Cursor {
     fn peek(&mut self) -> Option<Token> {
         self.stream.get(self.pos).cloned()
     }
+
+    fn last_idx(&mut self) -> Span {
+        // Ideally there should be checks on empty streams.
+        // Usually we use this function after we read a bad token,
+        // So it's better to go two back to find a good one.
+        self.stream[self.pos - 2].index.clone()
+    }
 }
 
 /*---Helper functions---*/
 
+// String to binary operator
 fn str_to_b_op(input_str: &str) -> Option<Operator> {
     use Operator::*;
 
@@ -136,6 +148,7 @@ fn str_to_b_op(input_str: &str) -> Option<Operator> {
     })
 }
 
+// String to unary operator
 fn str_to_u_op(input_str: &str) -> Option<Operator> {
     use Operator::*;
 
@@ -148,6 +161,8 @@ fn str_to_u_op(input_str: &str) -> Option<Operator> {
     })
 } 
 
+// Operator to precedence. 
+// Higher value is higher precedence.
 fn op_to_prec(op: &Operator) -> Option<i32> {
     use Operator::*;
 
@@ -172,6 +187,7 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
     })
 }
 
+// String to primitive type
 fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
     use Prim::*;
         
@@ -188,7 +204,7 @@ fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
         "double" => Float64,
         "bool"   => Bool,
         "str"    => String,
-        "()"     => Void,
+        "()"     => Void, // Should we use never?
 
         x if is_arr(x) => Arr(Box::new(str_to_prim(inner(x)?)?)),
 
@@ -196,40 +212,45 @@ fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
     })
 }
 
+// Don't think we use this... could be useful.
 fn is_end_key(c: &TokType) -> bool {
     use crate::ast::lexer::TokType::*;
     matches!(c, Eof | Guard | Comma | RBrack | RSquirl | SColon | Arrow | Indent | Dedent | Newline)
 }
 
+// Expect a certain token, else err.
 macro_rules! expect_else_err {
-    ($code:ident, $expected:pat, $idx:ident, $ret:expr) => {
-        let Some( Token { tok_type: $expected, index: index_match } ) = $code.next() else {
+    ($code:ident, $expected:pat, $ret:expr) => {
+        let Some( Token { tok_type: $expected, index: _ } ) = $code.next() else {
             return Err($ret)
         };
-        let $idx = index_match;
     };
 }
 
+// Find appropriate parse function.
 fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
+    // Better be an ident! What lines of code don't start with ident?
+    // I guess some expressions. Might have something for that.
     let tok = code.peek();
-    let Some(Token { tok_type: Ident(ident), index: idx }) = tok else { return Err(Generic) };
+    let Some(Token { tok_type: Ident(ident), index: idx }) = tok else { 
+        return Err(InvalidSyntax(code.last_idx()))
+    };
 
     Ok(match ident.as_str() {
         "fn"     => parse_fn_dec(code)?,
         "var"    => parse_var_dec(code)?,
+        //"enum"   => parse_enum_dec(code)?,
+        //"uni"    => parse_union_dec(code)?,
         "for"    => parse_for(code)?,
         "while"  => parse_while(code)?,
         "return" => parse_return(code)?,
+        //"break"  => 
+        //"continue" =>
 
-        // Horrendous. 
-        ident if matches!(code.stream.get(code.pos + 1), Some(Token { tok_type: Colon, .. })) => {
-            parse_var_dec(code)?
-        },
-
+        // If token after ident is =
         ident if matches!(code.stream.get(code.pos + 1), Some(Token { tok_type: Assign, .. })) => {
-            code.pos -= 1;
             parse_var_asn(code)?
         },
 
@@ -255,7 +276,7 @@ fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
     let mut statements = Vec::new();
     let mut idx: usize;
 
-    expect_else_err!(code, Indent, idx, Generic);
+    if let Some(Token { tok_type: Indent, index: _ }) = code.peek() { code.next(); }
 
     while let Some(tok) = code.peek() {
         match &tok.tok_type {
@@ -276,14 +297,14 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, fnkey,       idx, Generic); // Should never err.
-    expect_else_err!(code, Ident(name), idx, FnNoName(idx));
-    expect_else_err!(code, LBrack,      idx, FnNoParen(idx));
+    expect_else_err!(code, fnkey,       InvalidSyntax(code.last_idx())); // Should never err.
+    expect_else_err!(code, Ident(name), FnNoName(code.last_idx()));
+    expect_else_err!(code, LBrack,      FnNoParen(code.last_idx()));
 
     let mut args = Vec::new();
     while let Some(Token { tok_type: Ident(arg), index: idx }) = code.next() {
-        expect_else_err!(code, Colon,           idx, VarNoType(Span { line: idx.line, idx: idx.idx + arg.len() }));
-        expect_else_err!(code, Ident(type_str), idx, VarNoType(Span { line: idx.line, idx: idx.idx             }));
+        expect_else_err!(code, Colon,           VarNoType(Span { line: idx.line, idx: idx.idx + arg.len() }));
+        expect_else_err!(code, Ident(type_str), VarNoType(Span { line: idx.line, idx: idx.idx             }));
         
         // Have to do it manually here. Annoying.
         let check = code.next();
@@ -297,10 +318,10 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         args.push(Node::VarDec { name: arg, expr: None, var_type: type_str.clone() });
     }
 
-    expect_else_err!(code, Arrow,           idx, FnNoRetType(Span { line: idx.line, idx: idx.idx }));
-    expect_else_err!(code, Ident(type_str), idx, FnNoRetType(Span { line: idx.line, idx: idx.idx }));    
-    expect_else_err!(code, Colon,           idx, FnNoBody(   Span { line: idx.line, idx: idx.idx }));
-    expect_else_err!(code, Indent,          idx, FnNoBody(   Span { line: idx.line, idx: idx.idx }));
+    expect_else_err!(code, Arrow,           FnNoRetType(code.last_idx()));
+    expect_else_err!(code, Ident(type_str), FnNoRetType(code.last_idx()));    
+    expect_else_err!(code, Colon,           FnNoBody(   code.last_idx()));
+    expect_else_err!(code, Indent,          FnNoBody(   code.last_idx()));
     let fn_body = parse_block(code)?;
 
     let body = Box::new(fn_body);
@@ -310,27 +331,25 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 }
 
 fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
-    // var name: type;
-    // var name: type = stuff;
+    // var name: type
+    // var name: type = stuff
 
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, varkey,          idx, Generic); // Should never err.
-    expect_else_err!(code, Ident(name),     idx, VarNoName(idx));
-    expect_else_err!(code, Colon,           idx, VarNoType(idx));
-    expect_else_err!(code, Ident(type_str), idx, VarNoType(idx));
+    expect_else_err!(code, varkey,          InvalidSyntax(code.last_idx())); 
+    expect_else_err!(code, Ident(name),     VarNoName(code.last_idx()));
+    expect_else_err!(code, Colon,           VarNoType(code.last_idx()));
+    expect_else_err!(code, Ident(type_str), VarNoType(code.last_idx()));
 
-    let Some(tok) = code.next() else { return Err(Generic) };
-    let expr = match tok.tok_type {
-        Newline => None,
-        Assign  => Some(Box::new(parse_expr(code, 0)?)),
-        _ => return Err(Generic)
+    let expr = if let Some(Token { tok_type: Assign, .. }) = code.peek() {
+        code.next();
+        Some(Box::new(parse_expr(code, 0)?))
+    } else {
+        None
     };
 
-    let output = Node::VarDec { name: name, expr: expr, var_type: type_str.clone() };
-
-    Ok(output)
+    Ok(Node::VarDec { name: name, expr: expr, var_type: type_str.clone() })
 }
 
 fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
@@ -339,7 +358,7 @@ fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, LBrack, idx, Generic); // Should never err.
+    expect_else_err!(code, LBrack, InvalidSyntax(code.last_idx())); 
 
     let mut args = Vec::new();
     while let Some(Token { tok_type: Ident(arg), index: idx }) = code.next() {   
@@ -367,7 +386,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
     use Node::*;
 
     let Some(Token { tok_type: token, .. }) = code.next() else {
-        return Err(ExprParseErr(code.stream[code.pos - 1].index.clone()));
+        return Err(ExprParseErr(code.last_idx()));
     };
     let mut current = match token {
         Num(num) => Const { val: Constant::Num(num.parse().unwrap()) },
@@ -387,7 +406,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
             Var { name: name }
         },
 
-        _ => return Err(ExprParseErr(code.stream[code.pos - 1].index.clone()))
+        _ => return Err(ExprParseErr(code.last_idx()))
     };
 
     loop {
@@ -416,15 +435,26 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
 
 fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
-    let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), idx, Generic);
+    // for (
+    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, LBrack,     InvalidSyntax(code.last_idx()));
 
+    // var i: int = 0; i < 12; ++i
+    let init  = Box::new(parse_var_dec(code)?);
     let pred  = Box::new(parse_expr(code, 0)?);
+    let then  = Box::new(parse_expr(code, 0)?);    
+
+    // ):
+    expect_else_err!(code, RBrack, InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Colon,  InvalidSyntax(code.last_idx()));
+
     let block = Box::new(parse_block(code)?);
 
     Ok(Node::For { 
-        pred: pred, 
+        init: init, 
+        pred: pred,
+        then: then,
         block: block
     })
 }
@@ -433,7 +463,7 @@ fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), idx, Generic);
+    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));
 
     let pred  = Box::new(parse_expr(code, 0)?);
     let block = Box::new(parse_block(code)?);
@@ -448,14 +478,14 @@ fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), idx, Generic);    
-    expect_else_err!(code, Colon, idx, Generic); 
-    expect_else_err!(code, Indent, idx, Generic); 
+    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));    
+    expect_else_err!(code, Colon,      InvalidSyntax(code.last_idx())); 
+    expect_else_err!(code, Indent,     InvalidSyntax(code.last_idx())); 
 
     let mut guards = Vec::new();
     while let Some(Token { tok_type: Guard, index: idx }) = code.next() {   
         let pred = Box::new(parse_expr(code, 0)?);
-        expect_else_err!(code, Arrow, idx, Generic); 
+        expect_else_err!(code, Arrow, InvalidSyntax(code.last_idx())); 
         let expr = Box::new(parse_expr(code, 0)?);
         guards.push(Node::Guard { pred: pred, expr: expr });
 
@@ -475,8 +505,8 @@ fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, Ident(name), idx, Generic);
-    expect_else_err!(code, Assign, idx, Generic);
+    expect_else_err!(code, Ident(name), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Assign,      InvalidSyntax(code.last_idx()));
 
     let val = Box::new(parse_expr(code, 0)?);
 
@@ -490,7 +520,7 @@ fn parse_return(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
     let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), idx, Generic);
+    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));
 
     let val = Box::new(parse_expr(code, 0)?);
 
@@ -506,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_ast_gen() {
-        let code = "var j = 0\n    while i < 32 {{\nj = 324 \n}}";
+        let code = "j";
         let tokenized = tokenize_code(code);
         println!("Nodes:\n");
         println!("{:#?}\n", parse_file(tokenized, &"eyllo".to_string()));
