@@ -234,7 +234,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
     // Better be an ident! What lines of code don't start with ident?
     // I guess some expressions. Might have something for that.
     let tok = code.peek();
-    let Some(Token { tok_type: Ident(ident), index: idx }) = tok else { 
+    let Some(Token { tok_type: Ident(ident), .. }) = tok else { 
         return Err(InvalidSyntax(code.last_idx()))
     };
 
@@ -274,7 +274,6 @@ fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     let mut statements = Vec::new();
-    let mut idx: usize;
 
     if let Some(Token { tok_type: Indent, index: _ }) = code.peek() { code.next(); }
 
@@ -295,22 +294,21 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     // fn name(arg1: type, arg2: type) -> ret_type {  }
 
     use ParseError::*;
-    let mut idx: Span;
 
-    expect_else_err!(code, fnkey,       InvalidSyntax(code.last_idx())); // Should never err.
+    expect_else_err!(code, Ident(_),    InvalidSyntax(code.last_idx())); // Should never err.
     expect_else_err!(code, Ident(name), FnNoName(code.last_idx()));
     expect_else_err!(code, LBrack,      FnNoParen(code.last_idx()));
 
     let mut args = Vec::new();
-    while let Some(Token { tok_type: Ident(arg), index: idx }) = code.next() {
-        expect_else_err!(code, Colon,           VarNoType(Span { line: idx.line, idx: idx.idx + arg.len() }));
-        expect_else_err!(code, Ident(type_str), VarNoType(Span { line: idx.line, idx: idx.idx             }));
+    while let Some(Token { tok_type: Ident(arg), .. }) = code.next() {
+        expect_else_err!(code, Colon,           VarNoType(code.last_idx()));
+        expect_else_err!(code, Ident(type_str), VarNoType(code.last_idx()));
         
         // Have to do it manually here. Annoying.
         let check = code.next();
-        let Some( Token { tok_type: Comma, index: idx } ) = check else {
-            let Some( Token { tok_type: RBrack, index: idx } ) = check else {
-                return Err(FnBadArg(Span { line: idx.line, idx: idx.idx }));
+        let Some( Token { tok_type: Comma, .. } ) = check else {
+            let Some( Token { tok_type: RBrack, .. } ) = check else {
+                return Err(FnBadArg(code.last_idx()));
             };
             break;
         };
@@ -335,9 +333,8 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     // var name: type = stuff
 
     use ParseError::*;
-    let mut idx: Span;
 
-    expect_else_err!(code, varkey,          InvalidSyntax(code.last_idx())); 
+    expect_else_err!(code, Ident(_),        InvalidSyntax(code.last_idx())); 
     expect_else_err!(code, Ident(name),     VarNoName(code.last_idx()));
     expect_else_err!(code, Colon,           VarNoType(code.last_idx()));
     expect_else_err!(code, Ident(type_str), VarNoType(code.last_idx()));
@@ -356,17 +353,16 @@ fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
     // (arg1, arg2, arg3)
 
     use ParseError::*;
-    let mut idx: Span;
 
     expect_else_err!(code, LBrack, InvalidSyntax(code.last_idx())); 
 
     let mut args = Vec::new();
-    while let Some(Token { tok_type: Ident(arg), index: idx }) = code.next() {   
+    while let Some(Token { tok_type: Ident(arg), .. }) = code.next() {   
         args.push(Node::Var { name: arg });     
         let check = code.next();
-        let Some( Token { tok_type: Comma, index: idx } ) = check else {
-            let Some( Token { tok_type: RBrack, index: idx } ) = check else {
-                return Err(FnBadArg(Span { line: idx.line, idx: idx.idx }));
+        let Some( Token { tok_type: Comma, .. } ) = check else {
+            let Some( Token { tok_type: RBrack, .. } ) = check else {
+                return Err(FnBadArg(code.last_idx()));
             };
             break;
         };
@@ -437,7 +433,7 @@ fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     // for (
-    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
     expect_else_err!(code, LBrack,     InvalidSyntax(code.last_idx()));
 
     // var i: int = 0; i < 12; ++i
@@ -461,9 +457,8 @@ fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
 
 fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
-    let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
 
     let pred  = Box::new(parse_expr(code, 0)?);
     let block = Box::new(parse_block(code)?);
@@ -476,23 +471,22 @@ fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
 
 fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
-    let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));    
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));    
     expect_else_err!(code, Colon,      InvalidSyntax(code.last_idx())); 
     expect_else_err!(code, Indent,     InvalidSyntax(code.last_idx())); 
 
     let mut guards = Vec::new();
-    while let Some(Token { tok_type: Guard, index: idx }) = code.next() {   
+    while let Some(Token { tok_type: Guard, .. }) = code.next() {   
         let pred = Box::new(parse_expr(code, 0)?);
         expect_else_err!(code, Arrow, InvalidSyntax(code.last_idx())); 
         let expr = Box::new(parse_expr(code, 0)?);
         guards.push(Node::Guard { pred: pred, expr: expr });
 
         let check = code.next();
-        let Some( Token { tok_type: Comma, index: idx } ) = check else {
-            let Some( Token { tok_type: Dedent, index: idx } ) = check else {
-                return Err(FnBadArg(Span { line: idx.line, idx: idx.idx }));
+        let Some( Token { tok_type: Comma, .. } ) = check else {
+            let Some( Token { tok_type: Dedent, .. } ) = check else {
+                return Err(FnBadArg(code.last_idx()));
             };
             break;
         };
@@ -503,7 +497,6 @@ fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
 
 fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
-    let mut idx: Span;
 
     expect_else_err!(code, Ident(name), InvalidSyntax(code.last_idx()));
     expect_else_err!(code, Assign,      InvalidSyntax(code.last_idx()));
@@ -518,9 +511,8 @@ fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
 
 fn parse_return(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
-    let mut idx: Span;
 
-    expect_else_err!(code, Ident(tok), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
 
     let val = Box::new(parse_expr(code, 0)?);
 
@@ -535,10 +527,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ast_gen() {
-        let code = "j";
-        let tokenized = tokenize_code(code);
-        println!("Nodes:\n");
-        println!("{:#?}\n", parse_file(tokenized, &"eyllo".to_string()));
+    fn test_var_asn() {
+        println!("Var Assignment:\n");
+        let test = "var my_var: int = 0";
+        let thing = tokenize_code(test);
+        println!("{:#?}", parse_file(thing, &"var_asn".to_string()));
     }
 }
