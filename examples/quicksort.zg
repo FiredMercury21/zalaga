@@ -1,28 +1,56 @@
-fn quicksort(arr: int_vec) -> int_vec:
-    var output: int_vec = to_vec([])
+// This file is for demonstration purposes,
+// and is not necessarily the most efficient way to sort.
 
-    var pivot = {
-        if arr[0]:
-            arr[0]
-        else: 
-            return output
+//use std.mem
+//use std.rand
+
+struct int_arr:
+    arr: &int,
+    size: int
+
+fn copy_arr(to: int_arr, from: int_arr, offset: int) -> void:
+    for (var i: int = 0; i < from.size; ++i):
+        #(to.arr + i + offset) = #(from.arr + i)
+    return void
+
+fn quicksort(arr: int_arr) -> int_arr:
+    var pivot: int = {
+        if arr.size > 0:
+            #arr
+        else:
+            var empty: int_arr = int_arr[ arr = mem(0), size = 0 ]
+            return empty
     }
 
-    var lesser:  int_vec = to_vec([])
-    var greater: int_vec = to_vec([])   
-    var equal:   int_vec = to_vec([])
+    var lesser:  int_arr = int_arr[ arr = mem(arr.size * 4), size = 0 ]
+    var greater: int_arr = int_arr[ arr = mem(arr.size * 4), size = 0 ]
+    var equal:   int_arr = int_arr[ arr = mem(arr.size * 4), size = 0 ]
 
-    for (var i = 1; i < arr.len(); ++i):
-        var elem = arr[i]
+    for (var i: int = 0; i < arr.size; ++i):
+        var elem: int = #(arr.arr + i)
         if elem < pivot:
-            lesser.push(elem)
+            #(lesser.arr + i) = elem
+            ++lesser.size
         elif elem > pivot:
-            greater.push(elem)
+            #(greater.arr + i) = elem
+            ++greater.size
         else:
-            equal.push(elem)
+            #(equal.arr + i) = elem
+            ++equal.size
 
-    return quicksort(lesser) + equal + quicksort(greater)
+    var output:  int_arr = int_arr[ arr = mem(arr.size), size = arr.size ]
+    copy_arr(output, quicksort(lesser), 0)
+    copy_arr(output, quicksort(greater), lesser.size)
+    copy_arr(output, quicksort(equal), (lesser.size + greater.size))
+    
+    return output
 
-fn main():
-    arr = to_vec([12, 15, 43, 21, -21])
+fn main() -> void:
+    arr: int_arr = int_arr[ arr = mem(5 * 4), size = 5 ]
+    #(arr.arr + 0) = 2
+    #(arr.arr + 1) = -1
+    #(arr.arr + 2) = 4
+    #(arr.arr + 3) = 6
+    #(arr.arr + 4) = 10
     quicksort(arr)
+    return void
