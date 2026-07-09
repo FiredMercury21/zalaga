@@ -1,31 +1,13 @@
+use crate::ast::tree::ParseError::InvalidSyntax;
+
 use super::lexer::*;
 use super::lexer::TokType::*;
+use super::lexer::Operator;
 
 
 /*---Type Declarations---*/
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Operator {
-    Add,   // +
-    Sub,   // -
-    Mul,   // *
-    Div,   // /
-    Exp,   // ^
-    FDiv,  // //
-    Mod,   // %
-    LT,    // <
-    GT,    // >
-    ET,    // ==
-    LorET, // <=
-    GorET, // >=
-    NotET, // !=
-    Or,    // ||
-    And,   // &&
-    Neg,   // !
-    Inc,   // ++
-    Dec,   // --
-}
-
+/*
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prim {
     Char,
@@ -38,16 +20,14 @@ pub enum Prim {
     Bool,
     String,
     Void,
-    Arr(Box<Prim>),
-    
+    Ref(Box<Prim>),
 }
+*/
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {
     Num(i64),
     Float(f64),
-    Bool(bool),
-    String(String),
 } 
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,15 +40,25 @@ pub enum Node {
     VarAsn{ name: String,  val: Box<Node> },
     VarDec{ name: String, expr: Option<Box<Node>>, var_type: String },
     Var{    name: String },
+    Ref{    expr: Box<Node> },
+    Deref{  expr: Box<Node> },
     Match{  grds: Vec<Node> },
-    Guard{  pred: Box<Node>,  expr: Box<Node> },
+    Guard{  pred: Box<Node>, expr: Box<Node> },
+    Field{  base: Box<Node>, field:    String },
+    StructDef{ name: String, fields:   Vec<Node> },
+    Struct{                  fields:   Vec<Node>},
+    UnionDef{  name: String, fields:   Vec<Node>},
+    Union{                   fields:   Vec<Node>},
+    EnumDef{   name: String, variants: Vec<String>},
+    Enum{   variant: String },
     For{    init: Box<Node>,  pred: Box<Node>, then: Box<Node>, block: Box<Node> },
     While{  pred: Box<Node>, block: Box<Node> },
-    If{     then: Box<Node>,  expr: Box<Node>, else_block: Box<Node> },
+    If{     pred: Box<Node>, block: Box<Node>, else_block: Option<Box<Node>> },
     BinOp{ first: Box<Node>,    op: Operator,      second: Box<Node> },
     UnOp{    val: Box<Node>,    op: Operator },
     Return{  val: Box<Node> },
     Const{   val: Constant },
+    Use{    name: Box<Node> },
     Break,
     Continue,
 }
@@ -93,6 +83,7 @@ pub enum ParseError {
 // What we pass to every function.
 // I wanted to use an iterator but there's a
 // couple times we need to go back.
+#[derive(Debug, Clone, PartialEq)]
 struct Cursor {
     stream: Vec<Token>,
     pos: usize
@@ -114,50 +105,26 @@ impl Cursor {
 
     fn last_idx(&mut self) -> Span {
         // Ideally there should be checks on empty streams.
-        // Usually we use this function after we read a bad token,
-        // So it's better to go two back to find a good one.
-        self.stream[self.pos - 2].index.clone()
+        // Usually we use this function after we read a bad token.
+        match self.stream.get(self.pos - 1) {
+            Some(tok) => tok.index.clone(),
+            None => self.stream[self.pos - 2].index.clone()
+        }
     }
 }
 
 /*---Helper functions---*/
 
 // String to binary operator
-fn str_to_b_op(input_str: &str) -> Option<Operator> {
+fn is_bin_op(op: &Operator) -> bool {
     use Operator::*;
-
-    Some(match input_str {
-        "+"  => Add,
-        "-"  => Sub, 
-        "*"  => Mul,   
-        "/"  => Div,
-        "^"  => Exp,   
-        "//" => FDiv,       
-        "%"  => Mod,
-        "<"  => LT,    
-        ">"  => GT,    
-        "==" => ET,    
-        "<=" => LorET, 
-        ">=" => GorET, 
-        "!=" => NotET, 
-        "||" => Or,    
-        "&&" => And,   
-
-        _ => return None
-    })
+    matches!(op, Add | Sub | Mul | Div | Exp | Mod | LT | GT | ET | LorET | GorET | NotET | Or | And )
 }
 
 // String to unary operator
-fn str_to_u_op(input_str: &str) -> Option<Operator> {
+fn is_un_op(op: &Operator) -> bool {
     use Operator::*;
-
-    Some(match input_str {
-        "!"  => Neg,   
-        "++" => Inc,   
-        "--" => Dec, 
-
-        _ => return None
-    })
+    matches!(op, Neg | Inc | Dec)
 } 
 
 // Operator to precedence. 
@@ -171,7 +138,6 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
         Mul   => 15,   
         Div   => 15,   
         Exp   => 20,   
-        FDiv  => 15,
         Mod   => 15, 
         LT    => 5,    
         GT    => 5,    
@@ -186,36 +152,13 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
     })
 }
 
-// String to primitive type
-fn str_to_prim<'a>(input_str: &'a str) -> Option<Prim> {
-    use Prim::*;
-        
-    let is_arr = |input: &str| input.starts_with('[') && input.ends_with(']');
-    let inner  = |input: &'a str| Some(input.strip_prefix('[')?.strip_suffix(']')?.trim());
-
-    Some(match input_str {
-        "char"   => Char,
-        "short"  => Int16,
-        "int"    => Int32,
-        "long"   => Int64,
-        "half"   => Float16,
-        "float"  => Float32,
-        "double" => Float64,
-        "bool"   => Bool,
-        "str"    => String,
-        "()"     => Void, // Should we use never?
-
-        x if is_arr(x) => Arr(Box::new(str_to_prim(inner(x)?)?)),
-
-        _ => return None
-    })
-}
-
 // Don't think we use this... could be useful.
+/*
 fn is_end_key(c: &TokType) -> bool {
     use crate::ast::lexer::TokType::*;
     matches!(c, Eof | Guard | Comma | RBrack | RSquirl | SColon | Arrow | Indent | Dedent | Newline)
-}
+} 
+*/
 
 // Expect a certain token, else err.
 macro_rules! expect_else_err {
@@ -230,32 +173,40 @@ macro_rules! expect_else_err {
 fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
-    // Better be an ident! What lines of code don't start with ident?
-    // I guess some expressions. Might have something for that.
-    let tok = code.peek();
-    let Some(Token { tok_type: Ident(ident), .. }) = tok else { 
-        return Err(InvalidSyntax(code.last_idx()))
-    };
+    match code.peek() { 
+        Some(Token { tok_type: Ident(ident), .. }) => {
+            Ok(match ident.as_str() {
+                "fn"       => parse_fn_dec(code)?,
+                "var"      => parse_var_dec(code)?,
+                "enum"     => parse_enum_dec(code)?,
+                "uni"      => parse_union_dec(code)?,
+                "struct"   => parse_struct_dec(code)?,
+                //"use"    => parse_use(code)?,
+                "for"      => parse_for(code)?,
+                "if"       => parse_if(code)?,
+                "while"    => parse_while(code)?,
+                "return"   => parse_return(code)?,
+                "break"    => Node::Break,
+                "continue" => Node::Continue,
 
-    Ok(match ident.as_str() {
-        "fn"     => parse_fn_dec(code)?,
-        "var"    => parse_var_dec(code)?,
-        //"enum"   => parse_enum_dec(code)?,
-        //"uni"    => parse_union_dec(code)?,
-        "for"    => parse_for(code)?,
-        "while"  => parse_while(code)?,
-        "return" => parse_return(code)?,
-        "match"  => parse_match(code)?,
-        //"break"  => 
-        //"continue" =>
+                // If token after ident is =
+                _ if matches!(code.stream.get(code.pos + 1), Some(Token { tok_type: Assign, .. })) => {
+                    parse_var_asn(code)?
+                },
 
-        // If token after ident is =
-        _ if matches!(code.stream.get(code.pos + 1), Some(Token { tok_type: Assign, .. })) => {
-            parse_var_asn(code)?
+                _ => parse_expr(code, 0)?,
+            })
         },
 
-        _ => parse_expr(code, 0)?,
-    })
+        // If the thing is a pointer or in brackets, it's an expression.
+        Some(Token { tok_type: Op(..), .. }) |
+        Some(Token { tok_type: LBrack, ..}) => Ok(parse_expr(code, 0)?),
+
+        Some(Token { tok_type: LSquirl, .. }) => Ok(parse_block(code)?),
+
+        _ => return Err(InvalidSyntax(code.last_idx()))
+    }
+
 }
 
 /*---Parsers---*/
@@ -270,6 +221,7 @@ pub fn parse_file(code: Vec<Token>, name: &String ) -> Result<Node, ParseError> 
     })
 }
 
+// Blocks are whitespace-significant.
 fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
@@ -277,19 +229,18 @@ fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
 
     if let Some(Token { tok_type: Indent, index: _ }) = code.peek() { code.next(); }
 
-    while let Some(tok) = code.peek() {
-        match &tok.tok_type {
-            Dedent => break,
-            Eof => break,
-            Ident(_) => statements.push(match_to_parse(code)?),
-            _ => return Err(BlockParseErr(tok.index.clone()))
+    while let Some(Token { tok_type, index }) = code.next() {
+        match tok_type {
+            Dedent | Eof => break,
+            Newline => continue,
+            Ident(_) => { code.pos -= 1; statements.push(match_to_parse(code)?) },
+            _ => return Err(BlockParseErr(index.clone()))
         }
     }
 
     Ok(Node::Block { scope: statements })
 }
 
-// Horrendous code. May God forgive me.
 fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     // fn name(arg1: type, arg2: type) -> ret_type {  }
 
@@ -372,46 +323,43 @@ fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
 }
 
 fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
-    // func( {a / 2}, 3);
+    // func( (a / 2), 3);
     // 1 + 1;
-    // { func(arg1, arg2) + x } * y;
+    // ( func(arg1, arg2) + x ) * y;
+    // mystruct[ field1 = func(x); field2 = 2 + 3 ].field2 + 5 == 10
 
     // This is a tough one. Expressions can be recursive.
 
     use ParseError::*;
     use Node::*;
 
-    let Some(Token { tok_type: token, .. }) = code.next() else {
+    let Some(Token { tok_type, .. }) = code.next() else {
         return Err(ExprParseErr(code.last_idx()));
     };
-    let mut current = match token {
+    let mut current = match tok_type {
         Num(num) => Const { val: Constant::Num(num.parse().unwrap()) },
-        Str(string) => Const { val: Constant::String(string) },
         LBrack => parse_expr(code, 0)?,
-        Indent => { code.pos -= 1; parse_block(code)? },
+        LSquirl => parse_block(code)?,
 
-        Ident(c) if str_to_u_op(&c).is_some() => {
-            UnOp { val: Box::new(parse_expr(code, 0)?), op: str_to_u_op(&c).unwrap() }
+        Op(op) if is_un_op(&op) => {
+            let val = Box::new(parse_atom(code)?);
+            UnOp { val, op }
         },
 
         Ident(name) if matches!(code.peek(), Some(Token { tok_type: LBrack, .. })) => {
-            FnCall { name: name, args: parse_fn_args(code)? }
+            let args = parse_fn_args(code)?;
+            FnCall { name, args }
         },
 
-        Ident(name) => {
-            Var { name: name }
-        },
-
-        _ => return Err(ExprParseErr(code.last_idx()))
+        _ => { code.pos -= 1; parse_atom(code)? }
     };
 
     loop {
-        let Some(Token { tok_type: Ident(c), .. }) = code.next() else { 
+        // Consumes last token. Should we?
+        let Some(Token { tok_type: Op(op), .. }) = code.next() else { 
             break
         };
-        let Some(op) = str_to_b_op(&c) else {
-            break
-        };
+        if !is_bin_op(&op) { break }
 
         let new_prec = op_to_prec(&op).unwrap();
         if new_prec < prec { 
@@ -427,6 +375,51 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
     }
 
     Ok(current)
+}
+
+fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
+    // Ref and deref have Ident after them unless bracks,
+    // In which case expression.
+    // Field access can follow 
+    use ParseError::*;
+    use Node::*;
+
+    let current = if let Some(Token { tok_type, .. }) = code.next() {
+        match tok_type {
+            Deref => Deref { expr: Box::new(match code.peek() {
+                Some(Token { tok_type: LBrack,      .. }) => parse_expr(code, 0)?,
+                Some(Token { tok_type: Ident(name), .. }) => Var { name },
+                _ => return Err(InvalidSyntax(code.last_idx()))
+            }) },
+
+            Ref => Ref { expr: Box::new(match code.peek() {
+                Some(Token { tok_type: LBrack,      .. }) => parse_expr(code, 0)?,
+                Some(Token { tok_type: Ident(name), .. }) => Var { name },
+                _ => return Err(InvalidSyntax(code.last_idx()))
+            }) },
+
+            Ident(name) => Var { name },
+
+            LBrack => {
+                let expr = Box::new(parse_expr(code, 0)?);
+                Expr { expr }
+            },
+
+            _ => return Err(InvalidSyntax(code.last_idx()))
+        }
+    } else {
+        return Err(InvalidSyntax(code.last_idx()))
+    };
+
+    while matches!(code.peek(), Some(Token { tok_type: Period, .. })) {
+        expect_else_err!(code, Ident(field), InvalidSyntax(code.last_idx()));
+        current = Field { 
+            base: Box::new(current), 
+            field
+        };
+    }
+
+    return current
 }
 
 fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -519,6 +512,72 @@ fn parse_return(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(Node::Return { val: val })
 }
 
+fn parse_enum_def(code: &mut Cursor) -> Result<Node, ParseError> {
+    use ParseError::*;
+
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Ident(name), InvalidSyntax(code.last_idx()));    
+    expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Indent, InvalidSyntax(code.last_idx()));
+}
+
+fn parse_struct_def(code: &mut Cursor) -> Result<Node, ParseError> {
+    use ParseError::*;
+
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Ident(name), InvalidSyntax(code.last_idx()));    
+    expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Indent, InvalidSyntax(code.last_idx()));
+}
+
+fn parse_union_def(code: &mut Cursor) -> Result<Node, ParseError> {
+    use ParseError::*;
+
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Ident(name), InvalidSyntax(code.last_idx()));    
+    expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Indent, InvalidSyntax(code.last_idx()));
+}
+
+fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
+    // if stuff == bleh:
+    //     expression
+    // elif otherstuff:
+    //     expression
+    // else:
+
+    use ParseError::*;
+
+    expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
+
+    let pred = Box::new(parse_expr(code, 0)?);
+
+    expect_else_err!(code, Colon,   InvalidSyntax(code.last_idx()));
+    expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
+
+    let block = Box::new(parse_block(code)?);
+
+    // Weird syntax? Maybe rewrite.
+    let else_block = if let Some(Token { tok_type: Ident(tok), ..}) = code.peek() {
+        match tok.as_str() {
+            "else" => { 
+                code.next();     
+                expect_else_err!(code, Colon,   InvalidSyntax(code.last_idx()));
+                Some(Box::new(parse_block(code)?))
+            },
+            "elif" => Some(Box::new(parse_if(code)?)),
+            _ => None
+        }
+    } else {
+        None
+    };
+
+    Ok(Node::If { pred: pred, block: block, else_block: else_block })
+}
+
 /*---Tests---*/
 
 #[cfg(test)]
@@ -532,5 +591,15 @@ mod tests {
         let test = "var my_var: int = 0";
         let thing = tokenize_code(test);
         println!("{:#?}", parse_file(thing, &"var_asn".to_string()));
+    }
+
+    #[test]
+    fn test_quicksort_ast() {
+        use std::fs::File;
+        use std::io::prelude::*;
+        let mut file = File::open("./examples/quicksort.zg").unwrap();
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).unwrap();        
+        println!("{:#?}", parse_file(tokenize_code(&contents), &"quicksort".to_string()))
     }
 }
