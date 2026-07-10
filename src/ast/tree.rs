@@ -28,13 +28,13 @@ pub enum Node {
     Ref{    expr: Box<Node> },
     Deref{  expr: Box<Node> },
     Match{  grds: Vec<Node> },
-    Guard{  pred: Box<Node>, expr: Box<Node> },
+    Guard{  pred: Box<Node>, expr:     Box<Node> },
     Field{  base: Box<Node>, field:    String },
-    StructDef{ name: String, fields:   Vec<Node> },
-    Struct{                  fields:   Vec<Node>},
-    UnionDef{  name: String, fields:   Vec<Node>},
-    Union{                   fields:   Vec<Node>},
-    EnumDef{   name: String, variants: Vec<String>},
+    StructDec{ name: String, fields:   Vec<Node> },
+    Struct{                  fields:   Vec<Node> },
+    UnionDec{  name: String, variants: Vec<Node> },
+    EnumDec{   name: String, variants: Vec<String> },
+    Union{  variant: String },
     Enum{   variant: String },
     For{    init: Box<Node>,  pred: Box<Node>, then: Box<Node>, block: Box<Node> },
     While{  pred: Box<Node>, block: Box<Node> },
@@ -74,6 +74,7 @@ struct Cursor {
     pos: usize
 }
 
+// TODO: Refactor to Item = TokType for better ergonomics.
 impl Iterator for Cursor {
     type Item = Token;
     fn next(&mut self) -> Option<Token> {
@@ -94,6 +95,34 @@ impl Cursor {
         match self.stream.get(self.pos - 1) {
             Some(tok) => tok.index.clone(),
             None => self.stream[self.pos - 2].index.clone()
+        }
+    }
+
+    fn expect(&mut self, expected: TokType) -> Result<(), ParseError> {
+        match self.next() {
+            Some(Token { tok_type, .. }) if tok_type == expected => Ok(()),
+            _ => Err(InvalidSyntax(self.last_idx()))
+        }
+    }
+
+    fn expect_else(&mut self, expected: TokType, error: ParseError) -> Result<(), ParseError> {
+        match self.next() {
+            Some(Token { tok_type, .. }) if tok_type == expected => Ok(()),
+            _ => Err(error)
+        }
+    }
+
+    fn expect_ident(&mut self) -> Result<String, ParseError> {
+        match self.next() {
+            Some(Token { tok_type: Ident(ident), .. }) => Ok(ident),
+            _ => Err(InvalidSyntax(self.last_idx()))
+        }
+    }
+
+    fn expect_ident_else(&mut self, error: ParseError) -> Result<String, ParseError> {
+        match self.next() {
+            Some(Token { tok_type: Ident(ident), .. }) => Ok(ident),
+            _ => Err(error)
         }
     }
 }
@@ -497,7 +526,7 @@ fn parse_return(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(Node::Return { val: val })
 }
 
-fn parse_enum_def(code: &mut Cursor) -> Result<Node, ParseError> {
+fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
@@ -505,9 +534,28 @@ fn parse_enum_def(code: &mut Cursor) -> Result<Node, ParseError> {
     expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
     expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
     expect_else_err!(code, Indent, InvalidSyntax(code.last_idx()));
+    let mut variants = Vec::new();
+    while let Some(Token { tok_type: Ident(field), .. }) = code.next() {
+        variants.push(field);
+        match code.next() {
+            Some(Token { tok_type: Newline,  .. }) => {
+                expect_else_err!(code, Dedent, InvalidSyntax(code.last_idx()));
+                break
+            },
+
+            Some(Token { tok_type: Comma,   .. }) => {
+                expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
+                continue
+            },
+
+            _ => return Err(InvalidSyntax(code.last_idx()))
+        }
+    }
+
+    Ok(Node::EnumDec { name, variants })
 }
 
-fn parse_struct_def(code: &mut Cursor) -> Result<Node, ParseError> {
+fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
@@ -515,9 +563,31 @@ fn parse_struct_def(code: &mut Cursor) -> Result<Node, ParseError> {
     expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
     expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
     expect_else_err!(code, Indent, InvalidSyntax(code.last_idx()));
+
+    let mut fields = Vec::new();
+    while let Some(Token { tok_type: Ident(field), .. }) = code.next() {
+        expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
+        expect_else_err!(code, Ident(type_str), InvalidSyntax(code.last_idx()));
+        fields.push(Node::VarDec { name: field, expr: None, var_type: type_str });
+        match code.next() {
+            Some(Token { tok_type: Newline,  .. }) => {
+                expect_else_err!(code, Dedent, InvalidSyntax(code.last_idx()));
+                break
+            },
+
+            Some(Token { tok_type: Comma,   .. }) => {
+                expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
+                continue
+            },
+
+            _ => return Err(InvalidSyntax(code.last_idx()))
+        }
+    }
+
+    Ok(Node::StructDec { name, fields })
 }
 
-fn parse_union_def(code: &mut Cursor) -> Result<Node, ParseError> {
+fn parse_union_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
 
     expect_else_err!(code, Ident(_), InvalidSyntax(code.last_idx()));
@@ -525,6 +595,28 @@ fn parse_union_def(code: &mut Cursor) -> Result<Node, ParseError> {
     expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
     expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
     expect_else_err!(code, Indent, InvalidSyntax(code.last_idx()));
+
+    let mut variants = Vec::new();
+    while let Some(Token { tok_type: Ident(field), .. }) = code.next() {
+        expect_else_err!(code, Colon, InvalidSyntax(code.last_idx()));
+        expect_else_err!(code, Ident(type_str), InvalidSyntax(code.last_idx()));
+        variants.push(Node::VarDec { name: field, expr: None, var_type: type_str });
+        match code.next() {
+            Some(Token { tok_type: Newline,  .. }) => {
+                expect_else_err!(code, Dedent, InvalidSyntax(code.last_idx()));
+                break
+            },
+
+            Some(Token { tok_type: Comma,   .. }) => {
+                expect_else_err!(code, Newline, InvalidSyntax(code.last_idx()));
+                continue
+            },
+
+            _ => return Err(InvalidSyntax(code.last_idx()))
+        }
+    }
+
+    Ok(Node::UnionDec { name, variants })
 }
 
 fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
