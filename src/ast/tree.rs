@@ -7,22 +7,7 @@ use super::lexer::Operator;
 
 /*---Type Declarations---*/
 
-/*
-#[derive(Debug, Clone, PartialEq)]
-pub enum Prim {
-    Char,
-    Int16,
-    Int32,
-    Int64,
-    Float16,
-    Float32,
-    Float64,
-    Bool,
-    String,
-    Void,
-    Ref(Box<Prim>),
-}
-*/
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {
@@ -384,15 +369,15 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
     use Node::*;
 
-    let current = if let Some(Token { tok_type, .. }) = code.next() {
+    let mut current = if let Some(Token { tok_type, .. }) = code.next() {
         match tok_type {
-            Deref => Deref { expr: Box::new(match code.peek() {
+            Op(Operator::Deref) => Deref { expr: Box::new(match code.peek() {
                 Some(Token { tok_type: LBrack,      .. }) => parse_expr(code, 0)?,
                 Some(Token { tok_type: Ident(name), .. }) => Var { name },
                 _ => return Err(InvalidSyntax(code.last_idx()))
             }) },
 
-            Ref => Ref { expr: Box::new(match code.peek() {
+            Op(Operator::Ref) => Ref { expr: Box::new(match code.peek() {
                 Some(Token { tok_type: LBrack,      .. }) => parse_expr(code, 0)?,
                 Some(Token { tok_type: Ident(name), .. }) => Var { name },
                 _ => return Err(InvalidSyntax(code.last_idx()))
@@ -419,7 +404,7 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
         };
     }
 
-    return current
+    Ok(current)
 }
 
 fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
