@@ -1,6 +1,5 @@
 use crate::ast::tree::ParseError::InvalidSyntax;
 
-use super::lexer::Operator;
 use super::lexer::TokType::*;
 use super::lexer::*;
 
@@ -12,6 +11,15 @@ pub enum Constant {
     Float(f64),
 }
 
+// TODO: Make Nodes have spans.
+/*
+#[derive(Debug, Clone, PartialEq)]
+pub struct Node {
+    pub node: NodeType,
+    pub span: Span,
+}
+*/
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {
     Module {
@@ -21,7 +29,7 @@ pub enum Node {
     FnDec {
         name: String,
         args: Vec<Node>,
-        ret_type: String,
+        ret_type: Box<Node>,
         body: Box<Node>,
     },
     Block {
@@ -41,7 +49,7 @@ pub enum Node {
     VarDec {
         name: String,
         expr: Option<Box<Node>>,
-        var_type: String,
+        var_type: Box<Node>,
     },
     Var {
         name: String,
@@ -118,8 +126,17 @@ pub enum Node {
     Use {
         name: Box<Node>,
     },
+    Type {
+        name: TypeType,
+    },
     Break,
     Continue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeType {
+    Ref(Box<TypeType>),
+    Base(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,7 +279,6 @@ fn is_end_key(c: &TokType) -> bool {
 // Find appropriate parse function.
 fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
-
     match code.peek() {
         Some(Ident(ident)) => {
             Ok(match ident.as_str() {
@@ -360,7 +376,7 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         }
         let arg = code.expect_ident()?;
         code.expect_else(Colon, VarNoType(code.last_idx()))?;
-        let var_type = code.expect_ident_else(VarNoType(code.last_idx()))?;
+        let var_type = Box::new(parse_type(code)?);
         if Some(Comma) == code.peek() {
             code.next();
         }
@@ -372,7 +388,10 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     }
 
     code.expect_else(Arrow, FnNoRetType(code.last_idx()))?;
-    let ret_type = code.expect_ident_else(FnNoRetType(code.last_idx()))?;
+    let Ok(ret_type) = parse_type(code) else {
+        return Err(FnNoRetType(code.last_idx()));
+    };
+    let ret_type = Box::new(ret_type);
     code.expect_else(Colon, FnNoParen(code.last_idx()))?;
     code.expect_else(Newline, FnNoParen(code.last_idx()))?;
     code.expect_else(Indent, FnNoParen(code.last_idx()))?;
@@ -397,7 +416,7 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
     let name = code.expect_ident_else(VarNoName(code.last_idx()))?;
     code.expect_else(Colon, VarNoType(code.last_idx()))?;
-    let var_type = code.expect_ident_else(VarNoType(code.last_idx()))?;
+    let var_type = Box::new(parse_type(code)?);
 
     let expr = if let Some(Assign) = code.peek() {
         code.next();
@@ -675,11 +694,11 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     let mut fields = Vec::new();
     while let Some(Ident(field)) = code.next() {
         code.expect(Colon)?;
-        let type_str = code.expect_ident()?;
+        let var_type = Box::new(parse_type(code)?);
         fields.push(Node::VarDec {
             name: field,
             expr: None,
-            var_type: type_str,
+            var_type,
         });
         match code.next() {
             Some(Newline) => {
@@ -699,7 +718,27 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(Node::StructDec { name, fields })
 }
 
-//fn parse_struct(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {}
+fn parse_struct(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
+    code.expect(LSquare)?;
+    let mut fields = Vec::new();
+    while let Some(Ident(field)) = code.next() {
+        code.expect(Assign)?;
+        let val = Box::new(parse_expr(code, 0)?);
+        fields.push(Node::VarAsn { name: field, val });
+        match code.next() {
+            Some(RSquare) => {
+                code.expect(Newline)?;
+                break;
+            }
+
+            Some(Comma) => continue,
+
+            _ => return Err(InvalidSyntax(code.last_idx())),
+        }
+    }
+
+    Ok(fields)
+}
 
 fn parse_union_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
@@ -713,11 +752,11 @@ fn parse_union_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     let mut variants = Vec::new();
     while let Some(Ident(field)) = code.next() {
         code.expect(Colon)?;
-        let type_str = code.expect_ident()?;
+        let var_type = Box::new(parse_type(code)?);
         variants.push(Node::VarDec {
             name: field,
             expr: None,
-            var_type: type_str,
+            var_type,
         });
         match code.next() {
             Some(Newline) => {
@@ -775,6 +814,21 @@ fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
     })
 }
 
+// Really weird function, weird syntax, simple logic.
+fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
+    Ok(Node::Type {
+        name: match code.next() {
+            Some(Ident(type_string)) => TypeType::Base(type_string),
+            // ERROR: Multiple ref ('&&') turns into 'And' symbol in lexer.
+            Some(Op(Operator::Ref)) => TypeType::Ref(Box::new(match parse_type(code)? {
+                Node::Type { name } => name,
+                _ => unreachable!(),
+            })),
+            _ => return Err(InvalidSyntax(code.last_idx())),
+        },
+    })
+}
+
 /*---Tests---*/
 
 #[cfg(test)]
@@ -784,7 +838,7 @@ mod tests {
     #[test]
     fn test_var_asn() {
         println!("Var Assignment:\n");
-        let test = "var my_var: int = 0";
+        let test = "var my_var: int = 0\nvar vartwo: &stuff";
         let thing = tokenize_code(test);
         println!("{:#?}", parse_file(thing, &"var_asn".to_string()));
     }
