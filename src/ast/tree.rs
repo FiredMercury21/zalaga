@@ -11,12 +11,46 @@ pub enum Constant {
     Float(f64),
 }
 
-// TODO: Make Nodes have spans.
 /*
+// TODO: Make Nodes have spans.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub node: NodeType,
     pub span: Span,
+}
+
+// TODO: Use a single expr type for Rust-style expressions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Expr {
+    Var {
+        name: String,
+    },
+    VarAsn {
+        name: String,
+        val: Box<Node>,
+    },
+    Match {
+        expr: Box<Node>,
+        grds: Vec<Node>,
+    },
+    If {
+        cond: Box<Node>,
+        then: Box<Node>,
+        else: Option<Box<Node>>,
+    },
+    Statement {
+        expr: Box<Node>,
+    },
+    Block {
+        scope: Vec<Node>,
+    },
+    FnCall {
+        name: String,
+        args: Vec<Node>,
+    },
+    Const {
+        value: Constant,
+    },
 }
 */
 
@@ -387,6 +421,7 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         });
     }
 
+    code.expect_else(RBrack, FnNoParen(code.last_idx()))?;
     code.expect_else(Arrow, FnNoRetType(code.last_idx()))?;
     let Ok(ret_type) = parse_type(code) else {
         return Err(FnNoRetType(code.last_idx()));
@@ -420,7 +455,8 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 
     let expr = if let Some(Assign) = code.peek() {
         code.next();
-        Some(Box::new(parse_expr(code, 0)?))
+        let expr = Some(Box::new(parse_expr(code, 0)?));
+        expr
     } else {
         None
     };
@@ -469,26 +505,42 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
         return Err(ExprParseErr(code.last_idx()));
     };
     let mut current = match token {
+        // Constant numbers.
         Num(num) => Const {
             val: Constant::Num(num.parse().unwrap()),
         },
-        LBrack => parse_expr(code, 0)?,
+
+        // Bracketed expressions.
+        LBrack => {
+            let expr = parse_expr(code, 0)?;
+            code.expect(RBrack)?;
+            expr
+        }
+
+        // Block expressions.
         LSquirl => parse_block(code)?,
 
+        // Unary operators.
+        // ERROR: Doesn't work if unary works on non-atoms. Like *(&arr + 1).
+        // Is deref a unary op?
         Op(op) if is_un_op(&op) => {
             let val = Box::new(parse_atom(code)?);
             UnOp { val, op }
         }
 
+        // Function calls.
         Ident(name) if matches!(code.peek(), Some(LBrack)) => {
             let args = parse_fn_args(code)?;
             FnCall { name, args }
         }
 
+        // Struct def.
         Ident(name) if matches!(code.peek(), Some(LSquare)) => {
             let fields = parse_struct(code)?;
             Struct { name, fields }
         }
+
+        // Idents?
         _ => {
             code.pos -= 1;
             parse_atom(code)?
@@ -496,8 +548,19 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
     };
 
     loop {
+        // Field access. Duplicates parse_atom, because that doesn't work on structs. Refactor?
+        while matches!(code.peek(), Some(Period)) {
+            code.next();
+            let field = code.expect_ident_else(InvalidSyntax(code.last_idx()))?;
+            current = Field {
+                base: Box::new(current),
+                field,
+            };
+        }
+
         // Consumes last token. Should we?
-        let Some(Op(op)) = code.next() else { break };
+        let Some(Op(op)) = code.peek() else { break };
+        code.next();
         if !is_bin_op(&op) {
             break;
         }
@@ -529,7 +592,11 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
         match token {
             Op(Operator::Deref) => Deref {
                 expr: Box::new(match code.peek() {
-                    Some(LBrack) => parse_expr(code, 0)?,
+                    Some(LBrack) => {
+                        let expr = parse_expr(code, 0)?;
+                        code.expect(RBrack)?;
+                        expr
+                    }
                     Some(Ident(name)) => Var { name },
                     _ => return Err(InvalidSyntax(code.last_idx())),
                 }),
@@ -537,7 +604,11 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
 
             Op(Operator::Ref) => Ref {
                 expr: Box::new(match code.peek() {
-                    Some(LBrack) => parse_expr(code, 0)?,
+                    Some(LBrack) => {
+                        let expr = parse_expr(code, 0)?;
+                        code.expect(RBrack)?;
+                        expr
+                    }
                     Some(Ident(name)) => Var { name },
                     _ => return Err(InvalidSyntax(code.last_idx())),
                 }),
@@ -547,6 +618,7 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
 
             LBrack => {
                 let expr = Box::new(parse_expr(code, 0)?);
+                code.expect(RBrack)?;
                 Expr { expr }
             }
 
@@ -557,6 +629,7 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
     };
 
     while matches!(code.peek(), Some(Period)) {
+        code.next();
         let field = code.expect_ident_else(InvalidSyntax(code.last_idx()))?;
         current = Field {
             base: Box::new(current),
@@ -574,7 +647,9 @@ fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
 
     // var i: int = 0; i < 12; ++i
     let init = Box::new(parse_var_dec(code)?);
+    code.expect(SColon)?;
     let pred = Box::new(parse_expr(code, 0)?);
+    code.expect(SColon)?;
     let then = Box::new(parse_expr(code, 0)?);
 
     // ):
@@ -595,6 +670,7 @@ fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
 
     let pred = Box::new(parse_expr(code, 0)?);
+    code.expect(Colon)?;
     let block = Box::new(parse_block(code)?);
 
     Ok(Node::While {
@@ -638,6 +714,7 @@ fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect(Assign)?;
 
     let val = Box::new(parse_expr(code, 0)?);
+    code.expect(Newline)?;
 
     Ok(Node::VarAsn {
         name: name,
