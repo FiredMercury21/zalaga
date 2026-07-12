@@ -11,6 +11,7 @@ pub enum Operator {
     Div,
     Exp,
     Mod,
+    Assign,
 
     // Logical Operators
     LT,
@@ -51,7 +52,6 @@ pub enum TokType {
     Comma,
     Arrow,
     Period,
-    Assign,
 
     // Operators
     Op(Operator),
@@ -166,10 +166,17 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     idx += 1;
                     Op(Deref)
                 }
+
                 '^' => {
                     idx += 1;
                     Op(Exp)
                 }
+
+                '*' => {
+                    idx += 1;
+                    Op(Mul)
+                }
+
                 '%' => {
                     idx += 1;
                     Op(Mod)
@@ -187,6 +194,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 }
 
                 // Could make a macro for these
+                // ERROR: Negative numbers.
                 '-' => match look.peek() {
                     Some('>') => {
                         look.next();
@@ -284,7 +292,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     }
                     _ => {
                         idx += 1;
-                        Assign
+                        Op(Assign)
                     }
                 },
 
