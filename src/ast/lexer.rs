@@ -79,13 +79,6 @@ pub struct Token {
 
 /*---Helper functions---*/
 
-fn is_key(c: &char) -> bool {
-    matches!(
-        c,
-        ' ' | '\t' | '.' | '\n' | ',' | '(' | '|' | ')' | '{' | '}' | ':' | '"'
-    )
-}
-
 fn conv_code_ws(code: &str) -> String {
     let mut output = String::new();
     for line in code.lines() {
@@ -98,6 +91,19 @@ fn conv_code_ws(code: &str) -> String {
     output
 }
 
+// Based off an experimental method from the std library.
+fn split_once(arr: &[Token], mut pred: impl FnMut(&Token) -> bool) -> (&[Token], &[Token]) {
+    match arr.iter().position(|t| pred(t)) {
+        Some(i) => (&arr[..i], &arr[i..]),
+        None => (&[], arr),
+    }
+}
+
+// Check line number of split_once output, returning None if both empty.
+fn try_find_line((indents, tokens): &(&[Token], &[Token])) -> Option<usize> {
+    indents.first().or(tokens.first()).map(|tok| tok.index.line)
+}
+
 /*---Lexer---*/
 
 pub fn tokenize_code(code: &str) -> Vec<Token> {
@@ -108,7 +114,6 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
     let look = &mut cleaned.chars().peekable();
     let mut output = Vec::new();
     let mut stream = Vec::new();
-    //let mut multi_str = String::new();
     let mut line_idx = 1;
     let mut idx = 1;
     let mut prev_idx = 1;
@@ -371,24 +376,12 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
         }
     }
 
-    // Based off an experimental method from the std library.
-    fn split_once(arr: &[Token], mut pred: impl FnMut(&Token) -> bool) -> (&[Token], &[Token]) {
-        match arr.iter().position(|t| pred(t)) {
-            Some(i) => (&arr[..i], &arr[i..]),
-            None => (&[], arr),
-        }
-    }
-
     // Really weird. Tuple nightmare.
     // stream[i].0 is the indent block, stream[i].1 is the rest of the line.
     let stream: Vec<(&[Token], &[Token])> = stream
         .split_inclusive(|tok| tok.tok_type == TokType::Newline)
         .map(|line| split_once(line, |tok| tok.tok_type != TokType::Indent))
         .collect();
-
-    fn try_find_line((indents, tokens): &(&[Token], &[Token])) -> Option<usize> {
-        indents.first().or(tokens.first()).map(|tok| tok.index.line)
-    }
 
     output.extend_from_slice(&stream[0].1);
     for i in 1..(stream.len() - 1) {

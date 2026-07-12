@@ -126,7 +126,9 @@ pub enum Node {
         variants: Vec<String>,
     },
     Union {
+        name: String,
         variant: String,
+        val: Box<Node>,
     },
     Enum {
         variant: String,
@@ -143,7 +145,7 @@ pub enum Node {
     },
     If {
         pred: Box<Node>,
-        block: Box<Node>,
+        then: Box<Node>,
         else_block: Option<Box<Node>>,
     },
     BinOp {
@@ -288,6 +290,185 @@ impl Cursor {
 }
 
 /*---Helper functions---*/
+
+// Display Node
+impl std::fmt::Display for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fmt_indent(f, 0)
+    }
+}
+
+impl Node {
+    fn fmt_indent(&self, f: &mut std::fmt::Formatter<'_>, indent: usize) -> std::fmt::Result {
+        use Node::*;
+
+        let pre = "| ".repeat(indent);
+        write!(f, "{pre}")?;
+        match self {
+            Module { name, root } => {
+                writeln!(f, "Module '{name}'\n{pre}Module root:")?;
+                root.fmt_indent(f, indent + 1)
+            }
+            FnDec {
+                name,
+                args,
+                ret_type,
+                body,
+            } => {
+                writeln!(f, "FnDec '{name}'\n{pre}args:")?;
+                for node in args {
+                    node.fmt_indent(f, indent + 1)?;
+                }
+                writeln!(f, "{pre}ret_type:")?;
+                ret_type.fmt_indent(f, indent + 1)?;
+                writeln!(f, "{pre}body:")?;
+                body.fmt_indent(f, indent + 1)
+            }
+            Block { scope } => {
+                writeln!(f, "Block, scope:")?;
+                for node in scope {
+                    node.fmt_indent(f, indent + 1)?;
+                }
+                Ok(())
+            }
+            FnCall { name, args } => {
+                writeln!(f, "FnCall '{name}'\n{pre}args:")?;
+                for node in args {
+                    node.fmt_indent(f, indent + 1)?;
+                }
+                Ok(())
+            }
+            Expr { expr } => {
+                writeln!(f, "{pre}Expr:")?;
+                expr.fmt_indent(f, indent + 1)
+            }
+            VarAsn { name, val } => {
+                writeln!(f, "VarAsn '{name}'\n{pre}val:")?;
+                val.fmt_indent(f, indent + 1)
+            }
+            VarDec {
+                name,
+                expr,
+                var_type,
+            } => {
+                writeln!(f, "VarDec '{name}'\n{pre}type:")?;
+                var_type.fmt_indent(f, indent + 1)?;
+                match expr {
+                    Some(expr) => {
+                        writeln!(f, "{pre}val:")?;
+                        expr.fmt_indent(f, indent + 1)
+                    }
+                    None => writeln!(f, "{pre}No initializer."),
+                }
+            }
+            Var { name } => {
+                writeln!(f, "Var '{name}'")
+            }
+            Ref { expr } => {
+                writeln!(f, "Ref:")?;
+                expr.fmt_indent(f, indent + 1)
+            }
+            Deref { expr } => {
+                writeln!(f, "Deref:")?;
+                expr.fmt_indent(f, indent + 1)
+            }
+            Field { base, field } => {
+                writeln!(f, "Field Access, field '{field}' of:")?;
+                base.fmt_indent(f, indent + 1)
+            }
+            StructDec { name, fields } => {
+                writeln!(f, "StructDec '{name}'\n{pre}fields:")?;
+                for node in fields {
+                    node.fmt_indent(f, indent + 1)?;
+                }
+                Ok(())
+            }
+            UnionDec { name, variants } => {
+                writeln!(f, "UnionDec '{name}'\n{pre}variants:")?;
+                for node in variants {
+                    node.fmt_indent(f, indent + 1)?;
+                }
+                Ok(())
+            }
+            EnumDec { name, variants } => {
+                writeln!(f, "EnumDec '{name}'\n{pre}variants:")?;
+                for node in variants {
+                    writeln!(f, "{pre}| {node}")?;
+                }
+                Ok(())
+            }
+            Struct { name, fields } => {
+                writeln!(f, "Struct '{name}'\n{pre}fields:")?;
+                for node in fields {
+                    node.fmt_indent(f, indent + 1)?;
+                }
+                Ok(())
+            }
+            Union { name, variant, val } => {
+                writeln!(f, "Union '{name}', variant '{variant}'\n{pre}value:")?;
+                val.fmt_indent(f, indent + 1)?;
+                Ok(())
+            }
+            Enum { variant } => {
+                writeln!(f, "Enum '{variant}'")?;
+                Ok(())
+            }
+            For {
+                init,
+                pred,
+                then,
+                block,
+            } => {
+                writeln!(f, "For {init:?}\n{pre}pred:")?;
+                pred.fmt_indent(f, indent + 1)?;
+                writeln!(f, "{pre}then:")?;
+                then.fmt_indent(f, indent + 1)?;
+                writeln!(f, "{pre}block:")?;
+                block.fmt_indent(f, indent + 1)
+            }
+            While { pred, block } => {
+                writeln!(f, "While {pred:?}\n{pre}block:")?;
+                block.fmt_indent(f, indent + 1)
+            }
+            If {
+                pred,
+                then,
+                else_block,
+            } => {
+                writeln!(f, "If, pred:")?;
+                pred.fmt_indent(f, indent + 1)?;
+                writeln!(f, "{pre}then:")?;
+                then.fmt_indent(f, indent + 1)?;
+                match else_block {
+                    Some(block) => {
+                        writeln!(f, "{pre}else:")?;
+                        block.fmt_indent(f, indent + 1)
+                    }
+                    None => Ok(()),
+                }
+            }
+            BinOp { first, op, second } => {
+                writeln!(f, "Operator {op:?}\n{pre}first:")?;
+                first.fmt_indent(f, indent + 1)?;
+                writeln!(f, "{pre}second:")?;
+                second.fmt_indent(f, indent + 1)
+            }
+            UnOp { val, op } => {
+                writeln!(f, "Operator {op:?}\n{pre}val:")?;
+                val.fmt_indent(f, indent + 1)
+            }
+            Return { val } => {
+                writeln!(f, "Return\n{pre}val:")?;
+                val.fmt_indent(f, indent + 1)
+            }
+            Const { val } => {
+                writeln!(f, "Const\n{pre}val: {val:?}")
+            }
+
+            _ => writeln!(f, "{self:?}"),
+        }
+    }
+}
 
 // String to binary operator
 fn is_bin_op(op: &Operator) -> bool {
@@ -920,7 +1101,7 @@ fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_else(Newline, IfNoBlock(code.last_idx()))?;
     code.expect_else(Indent, IfNoBlock(code.last_idx()))?;
 
-    let block = Box::new(parse_block(code)?);
+    let then = Box::new(parse_block(code)?);
 
     // Weird syntax? Maybe rewrite.
     let else_block = if let Some(Ident(tok)) = code.peek() {
@@ -938,9 +1119,9 @@ fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
     };
 
     Ok(Node::If {
-        pred: pred,
-        block: block,
-        else_block: else_block,
+        pred,
+        then,
+        else_block,
     })
 }
 
@@ -979,6 +1160,10 @@ mod tests {
         let mut file = File::open("./examples/quicksort.zg").unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
+        println!(
+            "{}",
+            parse_file(tokenize_code(&contents), &"quicksort".to_string()).unwrap()
+        );
         assert!(parse_file(tokenize_code(&contents), &"quicksort".to_string()).is_ok());
     }
 }
