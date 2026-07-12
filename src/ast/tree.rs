@@ -1,5 +1,3 @@
-use crate::ast::tree::ParseError::InvalidSyntax;
-
 use super::lexer::TokType::*;
 use super::lexer::*;
 
@@ -16,6 +14,12 @@ pub enum Constant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub node: NodeType,
+    pub span: Span,
+}
+
+// TODO: Remove all code.last_idx() calls and place them in expect methods.
+pub struct ParseError {
+    pub node: ParseErrorType,
     pub span: Span,
 }
 
@@ -175,16 +179,39 @@ pub enum TypeType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
+    BadDeref(Span),
+    BadRef(Span),
+    BadAtom(Span),
     FnNoRetType(Span),
     FnNoParen(Span),
     FnNoName(Span),
     FnNoBody(Span),
     FnBadArg(Span),
+    FnSyntax(Span),
+    FnNoCloseBrack(Span),
     VarNoType(Span),
     VarNoName(Span),
+    ForNoInit(Span),
+    ForNoPred(Span),
+    ForNoBlock(Span),
+    WhileNoBlock(Span),
+    AsnBadSyntax(Span),
+    EnumNoBlock(Span),
+    EnumBadSyntax(Span),
+    StructNoBlock(Span),
+    StructBadSyntax(Span),
+    StructNoFieldInit(Span),
+    BadType(Span),
+    UnionNoBlock(Span),
+    UnionBadSyntax(Span),
+    IfNoBlock(Span),
     BlockParseErr(Span),
     ExprParseErr(Span),
+    UnclosedBrack(Span),
+    InvalidKeyword(Span),
+    InvalidField(Span),
     InvalidSyntax(Span),
+    Eof(Span),
     EmptyFile,
     Generic,
 }
@@ -231,7 +258,7 @@ impl Cursor {
     fn expect(&mut self, expected: TokType) -> Result<(), ParseError> {
         match self.next() {
             Some(token) if token == expected => Ok(()),
-            _ => Err(InvalidSyntax(self.last_idx())),
+            _ => Err(ParseError::InvalidSyntax(self.last_idx())),
         }
     }
 
@@ -247,7 +274,7 @@ impl Cursor {
     fn expect_ident(&mut self) -> Result<String, ParseError> {
         match self.next() {
             Some(Ident(ident)) => Ok(ident),
-            _ => Err(InvalidSyntax(self.last_idx())),
+            _ => Err(ParseError::InvalidSyntax(self.last_idx())),
         }
     }
 
@@ -267,14 +294,27 @@ fn is_bin_op(op: &Operator) -> bool {
     use Operator::*;
     matches!(
         op,
-        Add | Sub | Mul | Div | Exp | Mod | LT | GT | ET | LorET | GorET | NotET | Or | And
+        Add | Sub
+            | Mul
+            | Div
+            | Exp
+            | Mod
+            | LT
+            | GT
+            | ET
+            | LorET
+            | GorET
+            | NotET
+            | Or
+            | And
+            | Assign
     )
 }
 
 // String to unary operator
 fn is_un_op(op: &Operator) -> bool {
     use Operator::*;
-    matches!(op, Neg | Inc | Dec)
+    matches!(op, Neg | Inc | Dec | Ref | Deref)
 }
 
 // Operator to precedence.
@@ -297,6 +337,7 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
         NotET => 5,
         Or => 5,
         And => 5,
+        Assign => 3,
 
         _ => return None,
     })
@@ -313,9 +354,9 @@ fn is_end_key(c: &TokType) -> bool {
 // Find appropriate parse function.
 fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
     use ParseError::*;
-    match code.peek() {
+    Ok(match code.peek() {
         Some(Ident(ident)) => {
-            Ok(match ident.as_str() {
+            match ident.as_str() {
                 "fn" => parse_fn_dec(code)?,
                 "var" => parse_var_dec(code)?,
                 "enum" => parse_enum_dec(code)?,
@@ -333,7 +374,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                 _ if matches!(
                     code.stream.get(code.pos + 1),
                     Some(Token {
-                        tok_type: Assign,
+                        tok_type: Op(Operator::Assign),
                         ..
                     })
                 ) =>
@@ -342,16 +383,18 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                 }
 
                 _ => parse_expr(code, 0)?,
-            })
+            }
         }
 
         // If the thing is a pointer or in brackets, it's an expression.
-        Some(Op(..)) | Some(LBrack) => Ok(parse_expr(code, 0)?),
+        Some(Op(..)) | Some(LBrack) => parse_expr(code, 0)?,
 
-        Some(LSquirl) => Ok(parse_block(code)?),
+        Some(Indent) => parse_block(code)?,
 
-        _ => return Err(InvalidSyntax(code.last_idx())),
-    }
+        Some(LSquirl) => parse_block(code)?,
+
+        _ => return Err(InvalidKeyword(code.last_idx())),
+    })
 }
 
 /*---Parsers---*/
@@ -379,7 +422,7 @@ fn parse_block(code: &mut Cursor) -> Result<Node, ParseError> {
 
     while let Some(token) = code.peek() {
         match token {
-            Dedent | Eof => {
+            Dedent | Eof | RSquirl => {
                 code.next();
                 break;
             }
@@ -427,9 +470,9 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         return Err(FnNoRetType(code.last_idx()));
     };
     let ret_type = Box::new(ret_type);
-    code.expect_else(Colon, FnNoParen(code.last_idx()))?;
-    code.expect_else(Newline, FnNoParen(code.last_idx()))?;
-    code.expect_else(Indent, FnNoParen(code.last_idx()))?;
+    code.expect_else(Colon, FnNoRetType(code.last_idx()))?;
+    code.expect_else(Newline, FnSyntax(code.last_idx()))?;
+    code.expect_else(Indent, FnSyntax(code.last_idx()))?;
 
     let fn_body = parse_block(code)?;
     let body = Box::new(fn_body);
@@ -453,10 +496,9 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_else(Colon, VarNoType(code.last_idx()))?;
     let var_type = Box::new(parse_type(code)?);
 
-    let expr = if let Some(Assign) = code.peek() {
+    let expr = if let Some(Op(Operator::Assign)) = code.peek() {
         code.next();
-        let expr = Some(Box::new(parse_expr(code, 0)?));
-        expr
+        Some(Box::new(parse_expr(code, 0)?))
     } else {
         None
     };
@@ -476,16 +518,18 @@ fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
     code.expect(LBrack)?;
 
     let mut args = Vec::new();
-    while let Some(Ident(arg)) = code.next() {
-        args.push(Node::Var { name: arg });
-        let check = code.next();
-        let Some(Comma) = check else {
-            let Some(RBrack) = check else {
-                return Err(FnBadArg(code.last_idx()));
-            };
-            break;
-        };
+    while !matches!(code.peek(), Some(RBrack)) {
+        args.push(parse_expr(code, 0)?);
+        match code.peek() {
+            // TODO: refactor.
+            Some(RBrack) => break,
+            Some(Comma) => {
+                code.next();
+            }
+            _ => return Err(FnBadArg(code.last_idx())),
+        }
     }
+    code.expect_else(RBrack, FnNoCloseBrack(code.last_idx()))?;
 
     Ok(args)
 }
@@ -513,7 +557,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
         // Bracketed expressions.
         LBrack => {
             let expr = parse_expr(code, 0)?;
-            code.expect(RBrack)?;
+            code.expect_else(RBrack, UnclosedBrack(code.last_idx()))?;
             expr
         }
 
@@ -522,9 +566,9 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
 
         // Unary operators.
         // ERROR: Doesn't work if unary works on non-atoms. Like *(&arr + 1).
-        // Is deref a unary op?
+        // Actually, it might? parse_atom might do it.
         Op(op) if is_un_op(&op) => {
-            let val = Box::new(parse_atom(code)?);
+            let val = Box::new(parse_expr(code, 0)?);
             UnOp { val, op }
         }
 
@@ -551,16 +595,14 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
         // Field access. Duplicates parse_atom, because that doesn't work on structs. Refactor?
         while matches!(code.peek(), Some(Period)) {
             code.next();
-            let field = code.expect_ident_else(InvalidSyntax(code.last_idx()))?;
+            let field = code.expect_ident_else(InvalidField(code.last_idx()))?;
             current = Field {
                 base: Box::new(current),
                 field,
             };
         }
 
-        // Consumes last token. Should we?
         let Some(Op(op)) = code.peek() else { break };
-        code.next();
         if !is_bin_op(&op) {
             break;
         }
@@ -569,6 +611,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Node, ParseError> {
         if new_prec < prec {
             break;
         }
+        code.next();
         let second = Box::new(parse_expr(code, new_prec + 1)?);
 
         current = BinOp {
@@ -594,11 +637,11 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
                 expr: Box::new(match code.peek() {
                     Some(LBrack) => {
                         let expr = parse_expr(code, 0)?;
-                        code.expect(RBrack)?;
+                        code.expect_else(RBrack, UnclosedBrack(code.last_idx()))?;
                         expr
                     }
                     Some(Ident(name)) => Var { name },
-                    _ => return Err(InvalidSyntax(code.last_idx())),
+                    _ => return Err(BadDeref(code.last_idx())),
                 }),
             },
 
@@ -606,11 +649,11 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
                 expr: Box::new(match code.peek() {
                     Some(LBrack) => {
                         let expr = parse_expr(code, 0)?;
-                        code.expect(RBrack)?;
+                        code.expect_else(RBrack, UnclosedBrack(code.last_idx()))?;
                         expr
                     }
                     Some(Ident(name)) => Var { name },
-                    _ => return Err(InvalidSyntax(code.last_idx())),
+                    _ => return Err(BadRef(code.last_idx())),
                 }),
             },
 
@@ -618,19 +661,19 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
 
             LBrack => {
                 let expr = Box::new(parse_expr(code, 0)?);
-                code.expect(RBrack)?;
+                code.expect_else(RBrack, UnclosedBrack(code.last_idx()))?;
                 Expr { expr }
             }
 
-            _ => return Err(InvalidSyntax(code.last_idx())),
+            _ => return Err(BadAtom(code.last_idx())),
         }
     } else {
-        return Err(InvalidSyntax(code.last_idx()));
+        return Err(Eof(code.last_idx()));
     };
 
     while matches!(code.peek(), Some(Period)) {
         code.next();
-        let field = code.expect_ident_else(InvalidSyntax(code.last_idx()))?;
+        let field = code.expect_ident_else(InvalidField(code.last_idx()))?;
         current = Field {
             base: Box::new(current),
             field,
@@ -641,20 +684,22 @@ fn parse_atom(code: &mut Cursor) -> Result<Node, ParseError> {
 }
 
 fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
+    use ParseError::*;
+
     // for (
     code.expect_ident()?;
     code.expect(LBrack)?;
 
     // var i: int = 0; i < 12; ++i
     let init = Box::new(parse_var_dec(code)?);
-    code.expect(SColon)?;
+    code.expect_else(SColon, ForNoInit(code.last_idx()))?;
     let pred = Box::new(parse_expr(code, 0)?);
-    code.expect(SColon)?;
+    code.expect_else(SColon, ForNoPred(code.last_idx()))?;
     let then = Box::new(parse_expr(code, 0)?);
 
     // ):
-    code.expect(RBrack)?;
-    code.expect(Colon)?;
+    code.expect_else(RBrack, UnclosedBrack(code.last_idx()))?;
+    code.expect_else(Colon, ForNoBlock(code.last_idx()))?;
 
     let block = Box::new(parse_block(code)?);
 
@@ -667,10 +712,12 @@ fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
 }
 
 fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
+    use ParseError::*;
+
     code.expect_ident()?;
 
     let pred = Box::new(parse_expr(code, 0)?);
-    code.expect(Colon)?;
+    code.expect_else(Colon, WhileNoBlock(code.last_idx()))?;
     let block = Box::new(parse_block(code)?);
 
     Ok(Node::While {
@@ -710,11 +757,12 @@ fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
 */
 
 fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
+    use ParseError::*;
+
     let name = code.expect_ident()?;
-    code.expect(Assign)?;
+    code.expect_else(Op(Operator::Assign), AsnBadSyntax(code.last_idx()))?;
 
     let val = Box::new(parse_expr(code, 0)?);
-    code.expect(Newline)?;
 
     Ok(Node::VarAsn {
         name: name,
@@ -735,9 +783,9 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 
     code.expect_ident()?;
     let name = code.expect_ident()?;
-    code.expect(Colon)?;
-    code.expect(Newline)?;
-    code.expect(Indent)?;
+    code.expect_else(Colon, EnumNoBlock(code.last_idx()))?;
+    code.expect_else(Newline, EnumNoBlock(code.last_idx()))?;
+    code.expect_else(Indent, EnumNoBlock(code.last_idx()))?;
     let mut variants = Vec::new();
     while let Some(Ident(field)) = code.next() {
         variants.push(field);
@@ -752,7 +800,7 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
                 continue;
             }
 
-            _ => return Err(InvalidSyntax(code.last_idx())),
+            _ => return Err(EnumBadSyntax(code.last_idx())),
         }
     }
 
@@ -764,9 +812,9 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 
     code.expect_ident()?;
     let name = code.expect_ident()?;
-    code.expect(Colon)?;
-    code.expect(Newline)?;
-    code.expect(Indent)?;
+    code.expect_else(Colon, StructNoBlock(code.last_idx()))?;
+    code.expect_else(Newline, StructNoBlock(code.last_idx()))?;
+    code.expect_else(Indent, StructNoBlock(code.last_idx()))?;
 
     let mut fields = Vec::new();
     while let Some(Ident(field)) = code.next() {
@@ -788,7 +836,7 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
                 continue;
             }
 
-            _ => return Err(InvalidSyntax(code.last_idx())),
+            _ => return Err(StructBadSyntax(code.last_idx())),
         }
     }
 
@@ -796,10 +844,12 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 }
 
 fn parse_struct(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
+    use ParseError::*;
+
     code.expect(LSquare)?;
     let mut fields = Vec::new();
     while let Some(Ident(field)) = code.next() {
-        code.expect(Assign)?;
+        code.expect_else(Op(Operator::Assign), StructNoFieldInit(code.last_idx()))?;
         let val = Box::new(parse_expr(code, 0)?);
         fields.push(Node::VarAsn { name: field, val });
         match code.next() {
@@ -810,7 +860,7 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
 
             Some(Comma) => continue,
 
-            _ => return Err(InvalidSyntax(code.last_idx())),
+            _ => return Err(StructBadSyntax(code.last_idx())),
         }
     }
 
@@ -822,9 +872,9 @@ fn parse_union_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 
     code.expect_ident()?;
     let name = code.expect_ident()?;
-    code.expect(Colon)?;
-    code.expect(Newline)?;
-    code.expect(Indent)?;
+    code.expect_else(Colon, UnionBadSyntax(code.last_idx()))?;
+    code.expect_else(Newline, UnionBadSyntax(code.last_idx()))?;
+    code.expect_else(Indent, UnionBadSyntax(code.last_idx()))?;
 
     let mut variants = Vec::new();
     while let Some(Ident(field)) = code.next() {
@@ -846,7 +896,7 @@ fn parse_union_dec(code: &mut Cursor) -> Result<Node, ParseError> {
                 continue;
             }
 
-            _ => return Err(InvalidSyntax(code.last_idx())),
+            _ => return Err(UnionBadSyntax(code.last_idx())),
         }
     }
 
@@ -854,6 +904,8 @@ fn parse_union_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 }
 
 fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
+    use ParseError::*;
+
     // if stuff == bleh:
     //     expression
     // elif otherstuff:
@@ -864,8 +916,9 @@ fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
 
     let pred = Box::new(parse_expr(code, 0)?);
 
-    code.expect(Colon)?;
-    code.expect(Newline)?;
+    code.expect_else(Colon, IfNoBlock(code.last_idx()))?;
+    code.expect_else(Newline, IfNoBlock(code.last_idx()))?;
+    code.expect_else(Indent, IfNoBlock(code.last_idx()))?;
 
     let block = Box::new(parse_block(code)?);
 
@@ -874,7 +927,7 @@ fn parse_if(code: &mut Cursor) -> Result<Node, ParseError> {
         match tok.as_str() {
             "else" => {
                 code.next();
-                code.expect(Colon)?;
+                code.expect_else(Colon, IfNoBlock(code.last_idx()))?;
                 Some(Box::new(parse_block(code)?))
             }
             "elif" => Some(Box::new(parse_if(code)?)),
@@ -901,7 +954,7 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
                 Node::Type { name } => name,
                 _ => unreachable!(),
             })),
-            _ => return Err(InvalidSyntax(code.last_idx())),
+            _ => return Err(ParseError::BadType(code.last_idx())),
         },
     })
 }
@@ -914,10 +967,9 @@ mod tests {
 
     #[test]
     fn test_var_asn() {
-        println!("Var Assignment:\n");
         let test = "var my_var: int = 0\nvar vartwo: &stuff";
         let thing = tokenize_code(test);
-        println!("{:#?}", parse_file(thing, &"var_asn".to_string()));
+        assert!(parse_file(thing, &"var_asn".to_string()).is_ok());
     }
 
     #[test]
@@ -927,9 +979,6 @@ mod tests {
         let mut file = File::open("./examples/quicksort.zg").unwrap();
         let mut contents = String::new();
         file.read_to_string(&mut contents).unwrap();
-        println!(
-            "{:#?}",
-            parse_file(tokenize_code(&contents), &"quicksort".to_string())
-        )
+        assert!(parse_file(tokenize_code(&contents), &"quicksort".to_string()).is_ok());
     }
 }

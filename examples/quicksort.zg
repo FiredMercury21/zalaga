@@ -46,9 +46,9 @@ fn quicksort(arr: int_arr) -> int_arr:
     return output
 
 fn main() -> void:
-    arr: int_arr = int_arr[ arr = mem(5 * 4), size = 5 ]
+    var arr: int_arr = int_arr[ arr = mem(5 * 4), size = 5 ]
     #(arr.arr + 0) = 2
-    #(arr.arr + 1) = -1
+    #(arr.arr + 1) = 0-1
     #(arr.arr + 2) = 4
     #(arr.arr + 3) = 6
     #(arr.arr + 4) = 10
