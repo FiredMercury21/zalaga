@@ -689,18 +689,27 @@ fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
 
 // Really weird function, weird syntax, simple logic.
 fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
+    use TypeType::*;
+
     Ok(Node {
         node: Type {
             name: match code.next() {
-                Some(Ident(type_string)) => TypeType::Base(type_string),
-                // ERROR: Multiple ref ('&&') turns into 'And' symbol in lexer.
-                Some(Op(Operator::Ref)) => TypeType::Ref(Box::new(match parse_type(code)? {
+                Some(Ident(type_string)) => Base(type_string),
+                Some(Op(Operator::Ref)) => Ref(Box::new(match parse_type(code)? {
                     Node {
                         node: Type { name },
                         ..
                     } => name,
                     _ => unreachable!(),
                 })),
+                // Ewww. To handle '&&' turning into 'And' in lexer.
+                Some(Op(Operator::And)) => Ref(Box::new(Ref(Box::new(match parse_type(code)? {
+                    Node {
+                        node: Type { name },
+                        ..
+                    } => name,
+                    _ => unreachable!(),
+                })))),
                 _ => {
                     return Err(ParseError {
                         err: BadType,

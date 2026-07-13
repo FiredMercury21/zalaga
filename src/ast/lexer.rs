@@ -116,7 +116,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
     let mut stream = Vec::new();
     let mut line_idx = 1;
     let mut idx = 1;
-    let mut prev_idx = 1;
+    let mut prev_idx;
 
     while let Some(c) = look.next() {
         prev_idx = idx;
