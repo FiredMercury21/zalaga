@@ -82,10 +82,12 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                 "break" => Node {
                     node: Break,
                     span: code.last_idx(),
+                    id: code.new_id(),
                 },
                 "continue" => Node {
                     node: Continue,
                     span: code.last_idx(),
+                    id: code.new_id(),
                 },
 
                 // If token after ident is =
@@ -105,6 +107,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                         expr: parse_expr(code, 0)?,
                     },
                     span: code.last_idx(),
+                    id: code.new_id(),
                 },
             }
         }
@@ -115,6 +118,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                 expr: parse_expr(code, 0)?,
             },
             span: code.last_idx(),
+            id: code.new_id(),
         },
 
         Some(Indent) => Node {
@@ -122,6 +126,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                 expr: parse_block(code)?,
             },
             span: code.last_idx(),
+            id: code.new_id(),
         },
 
         Some(LSquirl) => Node {
@@ -129,6 +134,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                 expr: parse_block(code)?,
             },
             span: code.last_idx(),
+            id: code.new_id(),
         },
 
         _ => {
@@ -146,6 +152,7 @@ pub fn parse_file(code: Vec<Token>, name: &String) -> Result<Node, ParseError> {
     let mut cursor = Cursor {
         stream: code,
         pos: 0,
+        node_id: Id(0),
     };
 
     let mut scope = Vec::new();
@@ -170,6 +177,7 @@ pub fn parse_file(code: Vec<Token>, name: &String) -> Result<Node, ParseError> {
             scope,
         },
         span: cursor.last_idx(),
+        id: cursor.new_id(),
     })
 }
 
@@ -198,6 +206,7 @@ fn parse_block(code: &mut Cursor) -> Result<Expr, ParseError> {
     Ok(Expr {
         expr: ExprType::Block { scope: statements },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
@@ -226,6 +235,7 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
                 var_type,
             },
             span: code.last_idx(),
+            id: code.new_id(),
         });
     }
 
@@ -252,6 +262,7 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
             body,
         },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
@@ -278,6 +289,7 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
             var_type,
         },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
@@ -330,6 +342,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
                 val: Constant::Num(num.parse().unwrap()),
             },
             span: code.last_idx(),
+            id: code.new_id(),
         },
 
         // Bracketed expressions.
@@ -348,6 +361,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             Expr {
                 expr: UnOp { op, expr },
                 span: code.last_idx(),
+                id: code.new_id(),
             }
         }
 
@@ -366,6 +380,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             Expr {
                 expr: FnCall { name, args },
                 span: code.last_idx(),
+                id: code.new_id(),
             }
         }
 
@@ -375,12 +390,14 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             Expr {
                 expr: Struct { name, fields },
                 span: code.last_idx(),
+                id: code.new_id(),
             }
         }
 
         Ident(name) => Expr {
             expr: Var { name },
             span: code.last_idx(),
+            id: code.new_id(),
         },
 
         _ => {
@@ -402,6 +419,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
                     field,
                 },
                 span: code.last_idx(),
+                id: code.new_id(),
             };
         }
 
@@ -420,10 +438,11 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         current = Expr {
             expr: BinOp {
                 first: Box::new(current),
-                op: op,
-                second: second,
+                op,
+                second,
             },
             span: code.last_idx(),
+            id: code.new_id(),
         };
     }
 
@@ -442,40 +461,39 @@ fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
     // var i: int = 0; i < 12; ++i
     let init = Box::new(parse_var_dec(code)?);
     code.expect_else(SColon, ForNoInit)?;
-    let pred = Box::new(parse_expr(code, 0)?);
+    let pred = parse_expr(code, 0)?;
     code.expect_else(SColon, ForNoPred)?;
-    let then = Box::new(parse_expr(code, 0)?);
+    let then = parse_expr(code, 0)?;
 
     // ):
     code.expect_else(RBrack, UnclosedBrack)?;
     code.expect_else(Colon, ForNoBlock)?;
 
-    let block = Box::new(parse_block(code)?);
+    let block = parse_block(code)?;
 
     Ok(Node {
         node: For {
-            init: init,
-            pred: pred,
-            then: then,
-            block: block,
+            init,
+            pred,
+            then,
+            block,
         },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
 fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
 
-    let pred = Box::new(parse_expr(code, 0)?);
+    let pred = parse_expr(code, 0)?;
     code.expect_else(Colon, WhileNoBlock)?;
-    let block = Box::new(parse_block(code)?);
+    let block = parse_block(code)?;
 
     Ok(Node {
-        node: While {
-            pred: pred,
-            block: block,
-        },
+        node: While { pred, block },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
@@ -513,25 +531,24 @@ fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
     let name = code.expect_ident()?;
     code.expect_else(Op(Operator::Assign), AsnBadSyntax)?;
 
-    let val = Box::new(parse_expr(code, 0)?);
+    let val = parse_expr(code, 0)?;
 
     Ok(Node {
-        node: VarAsn {
-            name: name,
-            val: val,
-        },
+        node: VarAsn { name, val },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
 fn parse_return(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
 
-    let val = Box::new(parse_expr(code, 0)?);
+    let val = parse_expr(code, 0)?;
 
     Ok(Node {
-        node: Return { val: val },
+        node: Return { val },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
@@ -567,6 +584,7 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(Node {
         node: EnumDec { name, variants },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
@@ -588,6 +606,7 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
                 var_type,
             },
             span: code.last_idx(),
+            id: code.new_id(),
         });
         match code.next() {
             Some(Newline) => {
@@ -612,6 +631,7 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(Node {
         node: StructDec { name, fields },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
@@ -620,10 +640,11 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
     let mut fields = Vec::new();
     while let Some(Ident(field)) = code.next() {
         code.expect_else(Op(Operator::Assign), StructNoFieldInit)?;
-        let val = Box::new(parse_expr(code, 0)?);
+        let val = parse_expr(code, 0)?;
         fields.push(Node {
             node: VarAsn { name: field, val },
             span: code.last_idx(),
+            id: code.new_id(),
         });
         match code.next() {
             Some(RSquare) => {
@@ -684,12 +705,13 @@ fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
             else_block,
         },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 
 // Really weird function, weird syntax, simple logic.
 fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
-    use TypeType::*;
+    use TypeNode::*;
 
     Ok(Node {
         node: Type {
@@ -719,6 +741,7 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
             },
         },
         span: code.last_idx(),
+        id: code.new_id(),
     })
 }
 

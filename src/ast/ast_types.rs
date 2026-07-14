@@ -1,6 +1,9 @@
 use super::lexer::TokType::*;
 use super::lexer::*;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct Id(pub usize);
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {
     Num(i64),
@@ -11,6 +14,7 @@ pub enum Constant {
 pub struct Node {
     pub node: NodeType,
     pub span: Span,
+    pub id: Id,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,7 +27,17 @@ pub struct ParseError {
 pub struct Expr {
     pub expr: ExprType,
     pub span: Span,
+    pub id: Id,
+    //pub scope: Scope,
 }
+
+/*
+ * pub struct Scope {
+ *     pub functions: Vec<Node>,
+ *     pub types: Vec<Node>,
+ *     pub vars: Vec<Node>,
+ * }
+ */
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprType {
@@ -95,11 +109,11 @@ pub enum NodeType {
     },
     VarAsn {
         name: String,
-        val: Box<Expr>,
+        val: Expr,
     },
     Guard {
-        pred: Box<Expr>,
-        expr: Box<Expr>,
+        pred: Expr,
+        expr: Expr,
     },
     StructDec {
         name: String,
@@ -111,30 +125,30 @@ pub enum NodeType {
     },
     For {
         init: Box<Node>,
-        pred: Box<Expr>,
-        then: Box<Expr>,
-        block: Box<Expr>,
+        pred: Expr,
+        then: Expr,
+        block: Expr,
     },
     While {
-        pred: Box<Expr>,
-        block: Box<Expr>,
+        pred: Expr,
+        block: Expr,
     },
     Return {
-        val: Box<Expr>,
+        val: Expr,
     },
     Use {
         name: Box<Node>,
     },
     Type {
-        name: TypeType,
+        name: TypeNode,
     },
     Break,
     Continue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeType {
-    Ref(Box<TypeType>),
+pub enum TypeNode {
+    Ref(Box<TypeNode>),
     Base(String),
 }
 
@@ -174,6 +188,7 @@ pub enum ParseErrorType {
     InvalidField,
     InvalidSyntax,
     UnexpectedEof,
+    ScopeError,
     EmptyFile,
     Generic,
 }
@@ -185,6 +200,7 @@ pub enum ParseErrorType {
 pub struct Cursor {
     pub stream: Vec<Token>,
     pub pos: usize,
+    pub node_id: Id,
 }
 
 impl Iterator for Cursor {
@@ -214,6 +230,11 @@ impl Cursor {
             Some(tok) => tok.index.clone(),
             None => self.stream[self.pos - 2].index.clone(),
         }
+    }
+
+    pub fn new_id(&mut self) -> Id {
+        self.node_id.0 += 1;
+        self.node_id
     }
 
     // Expect a certain token, else err.
