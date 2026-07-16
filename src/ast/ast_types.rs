@@ -28,16 +28,7 @@ pub struct Expr {
     pub expr: ExprType,
     pub span: Span,
     pub id: Id,
-    //pub scope: Scope,
 }
-
-/*
- * pub struct Scope {
- *     pub functions: Vec<Node>,
- *     pub types: Vec<Node>,
- *     pub vars: Vec<Node>,
- * }
- */
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprType {
@@ -87,6 +78,8 @@ pub enum ExprType {
     },
 }
 
+// TODO: Make 'Type' its own Type.
+// It kinda already is. Why'd I use a Node??
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
     Module {
@@ -292,6 +285,10 @@ impl std::fmt::Display for Node {
     pub fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.fmt_indent(f, Vec::new())
     }
+}
+
+impl Expr {
+
 }
 
 impl Node {
