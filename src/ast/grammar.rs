@@ -70,9 +70,12 @@ pub enum ScopeError {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Is_Init(bool);
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Scope {
     pub parent: Option<usize>, // Vector-tree index.
-    pub vars: HashMap<String, Type>,
+    pub vars: HashMap<String, (Type, Is_Init)>,  // bool = initialized
     pub types: HashMap<String, Type>,
     pub functions: HashMap<String, Type>,
     pub node: Id,  // Unneeded?
@@ -144,7 +147,7 @@ fn populate_scope(root: &Node) -> Result<ScopeTable, ScopeError> {
 fn new_scope(table: &mut ScopeTable, parent: Option<usize>, id: Id) -> usize {
     table.scopes.push(Scope {
         parent,
-        vars:      HashMap::<String, self::Type>::new(),
+        vars:      HashMap::<String, (self::Type, Is_Init)>::new(),
         types:     HashMap::<String, self::Type>::new(),
         functions: HashMap::<String, self::Type>::new(),
         node: id,
@@ -171,7 +174,6 @@ fn scope_node(table: &mut ScopeTable, node: &Node, parent: Option<usize>) -> Res
         FnDec { args, body, ret_type, name } => {
             // New scope for function body.
             let idx = new_scope(table, parent, body.id);
-            table.node_scope.insert(body.id, idx);
 
             // Add each arg to current scope.
             let mut arg_types = Vec::new();
@@ -186,7 +188,7 @@ fn scope_node(table: &mut ScopeTable, node: &Node, parent: Option<usize>) -> Res
                     None => return Err(UndefinedType { name: node_type_to_str(var_type) }),
                 };
                 // Add arg to scope.
-                table.scopes[idx].vars.insert(name.clone(), arg_type.clone());
+                table.scopes[idx].vars.insert(name.clone(), (arg_type.clone(), Is_Init(true)));
                 arg_types.push(arg_type);
             }
             
@@ -209,13 +211,15 @@ fn scope_node(table: &mut ScopeTable, node: &Node, parent: Option<usize>) -> Res
         
         VarDec { name, expr, var_type } => {
             let ty = node_to_type(var_type, parent.unwrap(), table);
-            if let Some(ty) = ty {
-                table.scopes[parent.unwrap()].vars.insert(name.clone(), ty);
-            } else {
-                return Err(UndefinedType { name: node_type_to_str(var_type) });
-            }
+            let mut is_init = false;
             if let Some(expr) = expr {
                 scope_expr(table, expr, parent.unwrap())?;
+                is_init = true;
+            }
+            if let Some(ty) = ty {
+                table.scopes[parent.unwrap()].vars.insert(name.clone(), (ty, Is_Init(is_init)));
+            } else {
+                return Err(UndefinedType { name: node_type_to_str(var_type) });
             }
         }
         
@@ -258,8 +262,16 @@ fn scope_node(table: &mut ScopeTable, node: &Node, parent: Option<usize>) -> Res
         }
         
         VarAsn { name, val } => {
-            if matches!(find_in_scope(name, table, parent.unwrap(), ScopeType::Vars), None) {
-                return Err(UndefinedVar { name: name.clone() })
+            match find_in_scope(name, table, parent.unwrap(), ScopeType::Vars) {
+                Some(idx) => {
+                    scope_expr(table, val, parent.unwrap())?;
+                    // Update whether initialized.
+                    let ty = table.scopes[idx].vars.get(name).unwrap().0.clone();
+                    table.scopes[idx].vars.insert(name.clone(), (ty, Is_Init(true)));
+                }
+                None => {
+                    return Err(UndefinedVar { name: name.clone() });
+                }
             }
             scope_expr(table, val, parent.unwrap())?;
         }
@@ -271,16 +283,19 @@ fn scope_node(table: &mut ScopeTable, node: &Node, parent: Option<usize>) -> Res
 
         For { init, pred, then, block } => {
             let idx = new_scope(table, parent, block.id);
+            let mut is_init = false;
 
             // Add var to for block scope.
             let VarDec { name, expr, var_type } = &init.node else {
                 unreachable!()
             };
             let ty = node_to_type(var_type, idx, table).unwrap();
-            table.scopes[idx].vars.insert(name.clone(), ty);
             if let Some(expr) = expr {
                 scope_expr(table, expr, parent.unwrap())?;
+                is_init = true;
             }
+            table.scopes[idx].vars.insert(name.clone(), (ty, Is_Init(is_init)));
+
 
             // Check scopes underneath.
             scope_expr(table, pred, idx)?;
@@ -303,10 +318,7 @@ fn scope_node(table: &mut ScopeTable, node: &Node, parent: Option<usize>) -> Res
             //scope_expr(table, name, Some(parent.unwrap()))?;
         }
         
-        Type { .. } => {
-            unreachable!() // I think?
-        }
-        
+        Type { .. } => {}, // Unreachable?
         Break => {},
         Continue => {},
     };
@@ -342,6 +354,10 @@ fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
     loop {
         match &current {
             TypeNode::Base(name) => { 
+                if let Some(ty) = str_to_prim(name) {
+                    base = size_type(&TypeType::Prim(ty));
+                    break;
+                }
                 if let Some(idx) = find_in_scope(name, table, idx, ScopeType::Types) {
                     base = table.scopes[idx].types[name].clone();
                     break;
@@ -370,23 +386,33 @@ enum ScopeType {
     Functions,
 }
 
+// Checks scope and all parent scopes to see if the fn/var/type is defined.
 fn find_in_scope(name: &str, table: &ScopeTable, current: usize, ty: ScopeType) -> Option<usize> {
     let mut idx = current;
+    // Check all parent scopes to see if name is in them.
     loop {
+        // Handle vars bc HashMap has whether they're initialized. Diff type.
+        if let ScopeType::Vars = ty {
+            if let Some(_) = &table.scopes[idx].vars.get(name) {
+                return Some(idx)
+            }
+        }
+        // Check whether in scope.
         if let Some(_) = match ty {
-            ScopeType::Vars => &table.scopes[idx].vars,
             ScopeType::Types => &table.scopes[idx].types,
             ScopeType::Functions => &table.scopes[idx].functions,
+            _ => unreachable!() // Handled above.
         }.get(name) {
             return Some(idx)
         }
+        // Go to parent scope.
         if let Some(parent) = &table.scopes[idx].parent {
             idx = *parent;
         } else {
-            break
+            // If at root, return None. Not found.
+            return None
         }
     }
-    None
 }
 
 fn scope_expr(table: &mut ScopeTable, expr: &Expr, parent: usize) -> Result<(), ScopeError> {
@@ -429,7 +455,6 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, parent: usize) -> Result<(), 
                 return Err(UndefinedFn { name: name.clone() });
             }
         }
-        Const { .. } => {}
         Field { base, .. } => {
             scope_expr(table, base, parent)?;
             // How to check? eg- *(arr + 1).field = ...
@@ -447,6 +472,7 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, parent: usize) -> Result<(), 
             }
         }
         Enum { name, variant, .. } => {
+            
             /*
              * Don't know yet. Wanna make tagged unions.
              */
@@ -458,6 +484,9 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, parent: usize) -> Result<(), 
         UnOp { expr, .. } => {
             scope_expr(table, expr, parent)?;
         }
+        
+        // Always in scope.
+        Const { .. } => {} 
     }
     Ok(())
 }
