@@ -370,7 +370,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
     if !indent_n.last().unwrap().1 {
         indent_n.last_mut().unwrap().0 = 0;
     }
-    for i in (0..(indent_n.len() - 2)).rev() {
+    for i in (0..indent_n.len().saturating_sub(2)).rev() {
         if !indent_n[i].1 {
             indent_n[i].0 = indent_n[i + 1].0;
         }
