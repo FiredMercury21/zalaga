@@ -715,29 +715,26 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
 
     Ok(Node {
         node: Type {
-            name: match code.next() {
-                Some(Ident(type_string)) => Base(type_string),
-                Some(Op(Operator::Ref)) => Ref(Box::new(match parse_type(code)? {
-                    Node {
-                        node: Type { name },
-                        ..
-                    } => name,
-                    _ => unreachable!(),
-                })),
-                // Ewww. To handle '&&' turning into 'And' in lexer.
-                Some(Op(Operator::And)) => Ref(Box::new(Ref(Box::new(match parse_type(code)? {
-                    Node {
-                        node: Type { name },
-                        ..
-                    } => name,
-                    _ => unreachable!(),
-                })))),
-                _ => {
-                    return Err(ParseError {
-                        err: BadType,
-                        span: code.last_idx(),
-                    });
+            name: { 
+                let mut ref_n = 0;
+                let mut base = loop {
+                    match code.next() {
+                        Some(Ident(type_string)) => break Base(type_string),
+                        Some(Op(Operator::Ref)) => ref_n += 1,
+                        // Ewww. To handle '&&' turning into 'And' in lexer.
+                        Some(Op(Operator::And)) => ref_n += 2,
+                        _ => {
+                            return Err(ParseError {
+                                err: BadType,
+                                span: code.last_idx(),
+                            })
+                        }
+                    }
+                };
+                for _ in 0..ref_n {
+                    base = Ref(Box::new(base));
                 }
+                base
             },
         },
         span: code.last_idx(),
