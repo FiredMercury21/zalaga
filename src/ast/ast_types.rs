@@ -116,6 +116,10 @@ pub enum NodeType {
         name: String,
         variants: Vec<Node>,
     },
+    EnumVariant {
+        name: String,
+        var_type: Option<Box<Node>>,
+    },
     For {
         init: Box<Node>,
         pred: Expr,

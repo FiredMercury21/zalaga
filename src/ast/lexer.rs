@@ -52,6 +52,7 @@ pub enum TokType {
     Comma,
     Arrow,
     Period,
+    At,
 
     // Operators
     Op(Operator),
@@ -86,6 +87,7 @@ fn conv_code_ws(code: &str) -> String {
             .find(|c: char| !c.is_whitespace())
             .unwrap_or(line.len());
         let (indent, post) = line.split_at(idx);
+        // Maybe count whitespaces and find common denominator?
         output.push_str(&(indent.replace("    ", "\t") + post + "\n"))
     }
     output
@@ -165,6 +167,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '.' => {
                     idx += 1;
                     Period
+                }
+
+                '@' => {
+                    idx += 1;
+                    At
                 }
 
                 '#' => {

@@ -6,9 +6,9 @@ use super::ast_types::*;
 use super::lexer::TokType::*;
 use super::lexer::*;
 
-/*--- Types
- * All types are present within the `ast_types.rs`.
- */
+/*---Types---*/
+
+// All types are present within the `ast_types.rs`.
 
 /*---Helper functions---*/
 
@@ -321,6 +321,7 @@ fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
 }
 
 // TODO: Add match arms for keywords like match, if, etc.
+// TODO: Treat a Sub at the start as a negative sign. var a: int = -3.
 fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
     // func( (a / 2), 3);
     // 1 + 1;
@@ -389,6 +390,31 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             let fields = parse_struct(code)?;
             Expr {
                 expr: Struct { name, fields },
+                span: code.last_idx(),
+                id: code.new_id(),
+            }
+        }
+
+        // Enum variant.
+        // Maybe I should make parse_expr(). Prob not.
+        Ident(name) if matches!(code.peek(), Some(At)) => {
+            // variant@myenum[ val ]
+            // emptyvar@myenum
+
+            let variant = code.expect_ident()?;
+            code.expect(At)?;
+            let name = code.expect_ident()?;
+            let val = if code.peek() == Some(LSquare) {
+                code.next();
+                let payload = Box::new(parse_expr(code, 0)?);
+                code.expect(RSquare)?;
+                Some(payload)
+            } else {
+                None
+            };
+
+            Expr {
+                expr: ExprType::Enum { name, variant, val },
                 span: code.last_idx(),
                 id: code.new_id(),
             }
@@ -560,7 +586,15 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_else(Indent, EnumNoBlock)?;
     let mut variants = Vec::new();
     loop {
-        variants.push(parse_type(code)?);
+        variants.push(EnumVariant {
+            name: code.expect_ident()?,
+            var_type: {
+                match code.peek() {
+                    Some(Colon) => Some(Box::new(parse_type(code)?)),
+                    _ => None,
+                }
+            },
+        });
         match code.next() {
             Some(Newline) => {
                 code.expect(Dedent)?;
@@ -715,7 +749,7 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
 
     Ok(Node {
         node: Type {
-            name: { 
+            name: {
                 let mut ref_n = 0;
                 let mut base = loop {
                     match code.next() {
@@ -727,7 +761,7 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
                             return Err(ParseError {
                                 err: BadType,
                                 span: code.last_idx(),
-                            })
+                            });
                         }
                     }
                 };
