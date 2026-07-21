@@ -397,11 +397,10 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
 
         // Enum variant.
         // Maybe I should make parse_expr(). Prob not.
-        Ident(name) if matches!(code.peek(), Some(At)) => {
+        Ident(variant) if matches!(code.peek(), Some(At)) => {
             // variant@myenum[ val ]
             // emptyvar@myenum
 
-            let variant = code.expect_ident()?;
             code.expect(At)?;
             let name = code.expect_ident()?;
             let val = if code.peek() == Some(LSquare) {
@@ -475,7 +474,6 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
     Ok(current)
 }
 
-// TODO: Enums.
 // TODO: Match.
 // Those are related. How to handle enum syntax?
 

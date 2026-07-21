@@ -65,7 +65,7 @@ pub enum ExprType {
     Enum {
         name: String,
         variant: String,
-        val: Box<Expr>,
+        val: Option<Box<Expr>>,
     },
     BinOp {
         first: Box<Expr>,
@@ -78,13 +78,11 @@ pub enum ExprType {
     },
 }
 
-// TODO: Make 'Type' its own Type.
-// It kinda already is. Why'd I use a Node??
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
     Module {
         name: String,
-        scope: Vec<Node>,
+        scope: Vec<Node>, // TODO: Should rename this 'global'.
     },
     FnDec {
         name: String,
@@ -100,6 +98,7 @@ pub enum NodeType {
         expr: Option<Expr>,
         var_type: Box<Node>,
     },
+    // TODO: Get rid of VarAsn! Statement{ BinOp } with Assign fits all.
     VarAsn {
         name: String,
         val: Expr,
@@ -114,11 +113,7 @@ pub enum NodeType {
     },
     EnumDec {
         name: String,
-        variants: Vec<Node>,
-    },
-    EnumVariant {
-        name: String,
-        var_type: Option<Box<Node>>,
+        variants: Vec<EnumVariant>,
     },
     For {
         init: Box<Node>,
@@ -130,17 +125,26 @@ pub enum NodeType {
         pred: Expr,
         block: Expr,
     },
-    Return {
-        val: Expr,
-    },
     Use {
         name: Box<Node>,
     },
+    // TODO: Make 'Type' its own type.
+    // It kinda already is. Why'd I use a Node??
     Type {
         name: TypeNode,
     },
-    Break,
+    // TODO: These three are of 'Never' type, so should be expressions.
+    Return {
+        val: Expr,
+    },
+    Break, // TODO: Break with value. Easy.
     Continue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub var_type: Option<Box<Node>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
