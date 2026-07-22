@@ -203,10 +203,10 @@ pub struct Cursor {
 impl Iterator for Cursor {
     type Item = TokType;
     fn next(&mut self) -> Option<TokType> {
-        let ret = match self.stream.get(self.pos) {
-            Some(Token { tok_type, .. }) => Some(tok_type.clone()),
-            None => None,
-        };
+        let ret = self
+            .stream
+            .get(self.pos)
+            .map(|Token { tok_type, .. }| tok_type.clone());
         self.pos += 1;
         ret
     }
@@ -214,10 +214,9 @@ impl Iterator for Cursor {
 
 impl Cursor {
     pub fn peek(&self) -> Option<TokType> {
-        match self.stream.get(self.pos) {
-            Some(Token { tok_type, .. }) => Some(tok_type.clone()),
-            None => None,
-        }
+        self.stream
+            .get(self.pos)
+            .map(|Token { tok_type, .. }| tok_type.clone())
     }
 
     pub fn last_idx(&self) -> Span {

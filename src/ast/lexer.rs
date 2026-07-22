@@ -88,14 +88,14 @@ fn conv_code_ws(code: &str) -> String {
             .unwrap_or(line.len());
         let (indent, post) = line.split_at(idx);
         // Maybe count whitespaces and find common denominator?
-        output.push_str(&(indent.replace("    ", "\t") + post + "\n"))
+        output.push_str(&(indent.replace("    ", "\t") + post + "\n"));
     }
     output
 }
 
 // Based off an experimental method from the std library.
-fn split_once(arr: &[Token], mut pred: impl FnMut(&Token) -> bool) -> (&[Token], &[Token]) {
-    match arr.iter().position(|t| pred(t)) {
+fn split_once(arr: &[Token], pred: impl FnMut(&Token) -> bool) -> (&[Token], &[Token]) {
+    match arr.iter().position(pred) {
         Some(i) => (&arr[..i], &arr[i..]),
         None => (&[], arr),
     }
@@ -330,7 +330,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                             look.next();
                             look.peek_while::<_, String>(|c: &char| c.is_ascii_digit())
                         }
-                        _ => "".to_string(),
+                        _ => String::new(),
                     };
                     let num = dig + &post;
                     idx += num.len();
@@ -351,10 +351,10 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
             },
 
             index: Span {
-                line: line_idx.clone(),
+                line: line_idx,
                 idx: prev_idx,
             },
-        })
+        });
     }
 
     // The stupid indents. They preface each line. Need to cut them down
@@ -390,7 +390,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
         .map(|line| split_once(line, |tok| tok.tok_type != TokType::Indent))
         .collect();
 
-    output.extend_from_slice(&stream[0].1);
+    output.extend_from_slice(stream[0].1);
     for i in 1..(stream.len() - 1) {
         let indent_delta = indent_n[i].0 - indent_n[i - 1].0;
         output.extend_from_slice(
@@ -417,7 +417,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
             }),
         );
         // Copy the rest of the line.
-        output.extend_from_slice(&stream[i].1);
+        output.extend_from_slice(stream[i].1);
     }
 
     output.push(Token {

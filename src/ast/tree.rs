@@ -87,12 +87,12 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
         }
 
         // If the thing is a pointer or in brackets, it's an expression.
-        Some(Op(..)) | Some(LBrack) => {
+        Some(Op(..) | LBrack) => {
             let expr = parse_expr(code, 0)?;
             code.new_node(Statement { expr })
         }
 
-        Some(Indent) | Some(LSquirl) => {
+        Some(Indent | LSquirl) => {
             let expr = parse_block(code)?;
             code.new_node(Statement { expr })
         }
@@ -108,7 +108,7 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
 
 /*---Parsers---*/
 
-pub fn parse_file(code: Vec<Token>, name: &String) -> Result<Node, ParseError> {
+pub fn parse_file(code: Vec<Token>, name: &str) -> Result<Node, ParseError> {
     let mut cursor = Cursor {
         stream: code,
         pos: 0,
@@ -132,7 +132,7 @@ pub fn parse_file(code: Vec<Token>, name: &String) -> Result<Node, ParseError> {
     }
 
     Ok(cursor.new_node(Module {
-        name: name.clone(),
+        name: name.to_owned(),
         scope,
     }))
 }
