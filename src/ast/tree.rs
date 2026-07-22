@@ -78,64 +78,24 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
                 //"use"  => parse_use(code)?,
                 "for" => parse_for(code)?,
                 "while" => parse_while(code)?,
-                "return" => parse_return(code)?,
-                "break" => Node {
-                    node: Break,
-                    span: code.last_idx(),
-                    id: code.new_id(),
-                },
-                "continue" => Node {
-                    node: Continue,
-                    span: code.last_idx(),
-                    id: code.new_id(),
-                },
 
-                // If token after ident is =
-                _ if matches!(
-                    code.stream.get(code.pos + 1),
-                    Some(Token {
-                        tok_type: Op(Operator::Assign),
-                        ..
-                    })
-                ) =>
-                {
-                    parse_var_asn(code)?
+                _ => {
+                    let expr = parse_expr(code, 0)?;
+                    code.new_node(Statement { expr })
                 }
-
-                _ => Node {
-                    node: Statement {
-                        expr: parse_expr(code, 0)?,
-                    },
-                    span: code.last_idx(),
-                    id: code.new_id(),
-                },
             }
         }
 
         // If the thing is a pointer or in brackets, it's an expression.
-        Some(Op(..)) | Some(LBrack) => Node {
-            node: Statement {
-                expr: parse_expr(code, 0)?,
-            },
-            span: code.last_idx(),
-            id: code.new_id(),
-        },
+        Some(Op(..)) | Some(LBrack) => {
+            let expr = parse_expr(code, 0)?;
+            code.new_node(Statement { expr })
+        }
 
-        Some(Indent) => Node {
-            node: Statement {
-                expr: parse_block(code)?,
-            },
-            span: code.last_idx(),
-            id: code.new_id(),
-        },
-
-        Some(LSquirl) => Node {
-            node: Statement {
-                expr: parse_block(code)?,
-            },
-            span: code.last_idx(),
-            id: code.new_id(),
-        },
+        Some(Indent) | Some(LSquirl) => {
+            let expr = parse_block(code)?;
+            code.new_node(Statement { expr })
+        }
 
         _ => {
             return Err(ParseError {
@@ -171,14 +131,10 @@ pub fn parse_file(code: Vec<Token>, name: &String) -> Result<Node, ParseError> {
         }
     }
 
-    Ok(Node {
-        node: Module {
-            name: name.clone(),
-            scope,
-        },
-        span: cursor.last_idx(),
-        id: cursor.new_id(),
-    })
+    Ok(cursor.new_node(Module {
+        name: name.clone(),
+        scope,
+    }))
 }
 
 // Blocks are whitespace-significant.
@@ -203,11 +159,7 @@ fn parse_block(code: &mut Cursor) -> Result<Expr, ParseError> {
         }
     }
 
-    Ok(Expr {
-        expr: ExprType::Block { scope: statements },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_expr(ExprType::Block { scope: statements }))
 }
 
 fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -228,15 +180,11 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         if Some(Comma) == code.peek() {
             code.next();
         }
-        args.push(Node {
-            node: NodeType::VarDec {
-                name: arg,
-                expr: None,
-                var_type,
-            },
-            span: code.last_idx(),
-            id: code.new_id(),
-        });
+        args.push(code.new_node(VarDec {
+            name: arg,
+            expr: None,
+            var_type,
+        }));
     }
 
     code.expect_else(RBrack, FnNoParen)?;
@@ -254,16 +202,12 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 
     let body = parse_block(code)?;
 
-    Ok(Node {
-        node: FnDec {
-            name,
-            args,
-            ret_type,
-            body,
-        },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_node(FnDec {
+        name,
+        args,
+        ret_type,
+        body,
+    }))
 }
 
 fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -282,15 +226,11 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         None
     };
 
-    Ok(Node {
-        node: VarDec {
-            name,
-            expr,
-            var_type,
-        },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_node(VarDec {
+        name,
+        expr,
+        var_type,
+    }))
 }
 
 fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
@@ -338,13 +278,9 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
     };
     let mut current = match token {
         // Constant numbers.
-        Num(num) => Expr {
-            expr: Const {
-                val: Constant::Num(num.parse().unwrap()),
-            },
-            span: code.last_idx(),
-            id: code.new_id(),
-        },
+        Num(num) => code.new_expr(Const {
+            val: Constant::Num(num.parse().unwrap()),
+        }),
 
         // Bracketed expressions.
         LBrack => {
@@ -359,17 +295,25 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         // Unary operators.
         Op(op) if is_un_op(&op) => {
             let expr = Box::new(parse_expr(code, 0)?);
-            Expr {
-                expr: UnOp { op, expr },
-                span: code.last_idx(),
-                id: code.new_id(),
-            }
+            code.new_expr(UnOp { op, expr })
         }
 
         // If statement
         Ident(key) if key == "if" => {
-            code.pos -= 1;
+            code.pos -= 1; // Don't like this.
             parse_if(code)?
+        }
+
+        // Break statement
+        Ident(key) if key == "break" => {
+            code.pos -= 1;
+            parse_break(code)?
+        }
+
+        // Return statement
+        Ident(key) if key == "return" => {
+            code.pos -= 1;
+            parse_return(code)?
         }
 
         // Match statement
@@ -378,21 +322,13 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         // Function calls.
         Ident(name) if matches!(code.peek(), Some(LBrack)) => {
             let args = parse_fn_args(code)?;
-            Expr {
-                expr: FnCall { name, args },
-                span: code.last_idx(),
-                id: code.new_id(),
-            }
+            code.new_expr(FnCall { name, args })
         }
 
         // Struct def.
         Ident(name) if matches!(code.peek(), Some(LSquare)) => {
             let fields = parse_struct(code)?;
-            Expr {
-                expr: Struct { name, fields },
-                span: code.last_idx(),
-                id: code.new_id(),
-            }
+            code.new_expr(Struct { name, fields })
         }
 
         // Enum variant.
@@ -412,18 +348,10 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
                 None
             };
 
-            Expr {
-                expr: ExprType::Enum { name, variant, val },
-                span: code.last_idx(),
-                id: code.new_id(),
-            }
+            code.new_expr(Enum { name, variant, val })
         }
 
-        Ident(name) => Expr {
-            expr: Var { name },
-            span: code.last_idx(),
-            id: code.new_id(),
-        },
+        Ident(name) => code.new_expr(Var { name }),
 
         _ => {
             return Err(ParseError {
@@ -438,14 +366,10 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         while matches!(code.peek(), Some(Period)) {
             code.next();
             let field = code.expect_ident_else(InvalidField)?;
-            current = Expr {
-                expr: Field {
-                    base: Box::new(current),
-                    field,
-                },
-                span: code.last_idx(),
-                id: code.new_id(),
-            };
+            current = code.new_expr(Field {
+                base: Box::new(current),
+                field,
+            });
         }
 
         let Some(Op(op)) = code.peek() else { break };
@@ -460,15 +384,11 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         code.next();
         let second = Box::new(parse_expr(code, new_prec + 1)?);
 
-        current = Expr {
-            expr: BinOp {
-                first: Box::new(current),
-                op,
-                second,
-            },
-            span: code.last_idx(),
-            id: code.new_id(),
-        };
+        current = code.new_expr(BinOp {
+            first: Box::new(current),
+            op,
+            second,
+        });
     }
 
     Ok(current)
@@ -495,16 +415,12 @@ fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
 
     let block = parse_block(code)?;
 
-    Ok(Node {
-        node: For {
-            init,
-            pred,
-            then,
-            block,
-        },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_node(For {
+        init,
+        pred,
+        then,
+        block,
+    }))
 }
 
 fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -514,11 +430,7 @@ fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_else(Colon, WhileNoBlock)?;
     let block = parse_block(code)?;
 
-    Ok(Node {
-        node: While { pred, block },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_node(While { pred, block }))
 }
 
 /*
@@ -551,29 +463,28 @@ fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
 }
 */
 
-fn parse_var_asn(code: &mut Cursor) -> Result<Node, ParseError> {
-    let name = code.expect_ident()?;
-    code.expect_else(Op(Operator::Assign), AsnBadSyntax)?;
-
-    let val = parse_expr(code, 0)?;
-
-    Ok(Node {
-        node: VarAsn { name, val },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
-}
-
-fn parse_return(code: &mut Cursor) -> Result<Node, ParseError> {
+fn parse_break(code: &mut Cursor) -> Result<Expr, ParseError> {
     code.expect_ident()?;
 
-    let val = parse_expr(code, 0)?;
+    let val = match code.peek() {
+        // What other tokens mean no expr?
+        Some(Newline) => None,
+        _ => Some(Box::new(parse_expr(code, 0)?)),
+    };
 
-    Ok(Node {
-        node: Return { val },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_expr(Break { val }))
+}
+
+fn parse_return(code: &mut Cursor) -> Result<Expr, ParseError> {
+    code.expect_ident()?;
+
+    let val = match code.peek() {
+        // What other tokens mean no expr?
+        Some(Newline) => None,
+        _ => Some(Box::new(parse_expr(code, 0)?)),
+    };
+
+    Ok(code.new_expr(Return { val }))
 }
 
 fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -588,7 +499,10 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
             name: code.expect_ident()?,
             var_type: {
                 match code.peek() {
-                    Some(Colon) => Some(Box::new(parse_type(code)?)),
+                    Some(Colon) => {
+                        code.next();
+                        Some(Box::new(parse_type(code)?))
+                    }
                     _ => None,
                 }
             },
@@ -613,11 +527,7 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         }
     }
 
-    Ok(Node {
-        node: EnumDec { name, variants },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_node(EnumDec { name, variants }))
 }
 
 fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -631,15 +541,11 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     while let Some(Ident(field)) = code.next() {
         code.expect(Colon)?;
         let var_type = Box::new(parse_type(code)?);
-        fields.push(Node {
-            node: VarDec {
-                name: field,
-                expr: None,
-                var_type,
-            },
-            span: code.last_idx(),
-            id: code.new_id(),
-        });
+        fields.push(code.new_node(VarDec {
+            name: field,
+            expr: None,
+            var_type,
+        }));
         match code.next() {
             Some(Newline) => {
                 code.expect(Dedent)?;
@@ -660,24 +566,21 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         }
     }
 
-    Ok(Node {
-        node: StructDec { name, fields },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_node(StructDec { name, fields }))
 }
 
-fn parse_struct(code: &mut Cursor) -> Result<Vec<Node>, ParseError> {
+fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
     code.expect(LSquare)?;
     let mut fields = Vec::new();
     while let Some(Ident(field)) = code.next() {
         code.expect_else(Op(Operator::Assign), StructNoFieldInit)?;
         let val = parse_expr(code, 0)?;
-        fields.push(Node {
-            node: VarAsn { name: field, val },
-            span: code.last_idx(),
-            id: code.new_id(),
-        });
+        let field_var = code.new_expr(Var { name: field });
+        fields.push(code.new_expr(BinOp {
+            first: Box::new(field_var),
+            op: Operator::Assign,
+            second: Box::new(val),
+        }));
         match code.next() {
             Some(RSquare) => {
                 code.expect(Newline)?;
@@ -730,15 +633,11 @@ fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
         None
     };
 
-    Ok(Expr {
-        expr: If {
-            pred,
-            then,
-            else_block,
-        },
-        span: code.last_idx(),
-        id: code.new_id(),
-    })
+    Ok(code.new_expr(If {
+        pred,
+        then,
+        else_block,
+    }))
 }
 
 // Really weird function, weird syntax, simple logic.

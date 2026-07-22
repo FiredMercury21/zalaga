@@ -60,7 +60,7 @@ pub enum ExprType {
     },
     Struct {
         name: String,
-        fields: Vec<Node>,
+        fields: Vec<Expr>, // Each is a BinOp with Operator::Assign.
     },
     Enum {
         name: String,
@@ -76,6 +76,13 @@ pub enum ExprType {
         op: Operator,
         expr: Box<Expr>,
     },
+    Return {
+        val: Option<Box<Expr>>,
+    },
+    Break {
+        val: Option<Box<Expr>>,
+    },
+    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,11 +104,6 @@ pub enum NodeType {
         name: String,
         expr: Option<Expr>,
         var_type: Box<Node>,
-    },
-    // TODO: Get rid of VarAsn! Statement{ BinOp } with Assign fits all.
-    VarAsn {
-        name: String,
-        val: Expr,
     },
     Guard {
         pred: Expr,
@@ -133,12 +135,6 @@ pub enum NodeType {
     Type {
         name: TypeNode,
     },
-    // TODO: These three are of 'Never' type, so should be expressions.
-    Return {
-        val: Expr,
-    },
-    Break, // TODO: Break with value. Easy.
-    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -283,6 +279,22 @@ impl Cursor {
                 err: error,
                 span: self.last_idx(),
             }),
+        }
+    }
+
+    pub fn new_node(&mut self, from: NodeType) -> Node {
+        Node {
+            node: from,
+            span: self.last_idx(),
+            id: self.new_id(),
+        }
+    }
+
+    pub fn new_expr(&mut self, from: ExprType) -> Expr {
+        Expr {
+            expr: from,
+            span: self.last_idx(),
+            id: self.new_id(),
         }
     }
 }
