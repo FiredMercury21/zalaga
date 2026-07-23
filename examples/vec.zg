@@ -1,0 +1,49 @@
+var std = use std
+
+struct vec {
+    data: &char,
+    size: int,
+    capacity: int,
+}
+
+fn new(bytes: int) -> &vec:
+    let data = std.mem(bytes)
+    return &vec[data = data, size = 0, capacity = bytes]
+
+fn push(v: &vec, c: char) -> &vec:
+    ++v.size
+    if v.size >= v.capacity:
+        let new_data = std.mem(v.capacity * 2)
+        for (var i = 0; i < v.size - 1; ++i):
+            #(new_data + i) = #(v.data + i)
+        v.data = new_data
+        v.capacity = v.capacity * 2
+    v.data[v.size - 1] = c
+    return v
+
+fn set(v: &vec, index: int, c: char):
+    #(v.data + index) = c
+
+fn prepend(v: &vec, c: char):
+    v.size += 1
+    if v.capacity = 0:
+        v = new(1)
+        v.set(0, c)
+        return void
+    if v.size >= v.capacity:
+        let new_data = std.mem(v.capacity * 2)
+        for (var i = 0; i < v.size; ++i):
+            #(new_data + i + 1) = #(v.data + i)
+        v.data = new_data
+        #(v.data) = c
+        v.capacity = v.capacity * 2
+        return void
+    else:
+        for (var i = 0; i < vec.size; ++i):
+            #(v.data + i) = #(v.data + i - 1)
+    #(v.data) = c
+    return void
+
+fn pop(v: &vec) -> char:
+    v.size -= 1
+    return #(v.data + v.size + 1)

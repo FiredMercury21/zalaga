@@ -1,0 +1,60 @@
+var std = use std
+var vec = std.vec // Vec is an integer vector.
+
+fn main() {
+    let code = ">++++++++[<+++++++++>-]<.>++++[<+++++++>-]<+.+++++++..+++.>>++++++[<+++++++>-]<++.------------.>++++++[<+++++++++>-]<+.<.+++.------.--------.>>>++++[<++++++++>-]<+."
+    let result = run(code)
+    if result != 0:
+        std.print("Error running code")
+    std.print("Successful run")
+}
+
+fn run(code: &char) -> int:
+    var tape = vec.new(10000)
+    var ptr = 0
+    for (var c = 0; c < code.len(); ++c):
+        match #(code + c):
+            // Cursor movement
+            '>' -> {
+                ptr += 1
+                if ptr >= tape.len() {
+                    vec.push(tape, 0)
+                }
+            },
+            '<' -> {
+                ptr -= 1
+                if ptr < 0 {
+                    vec.prepend(tape, 0)
+                    ptr = 0
+                }
+            },
+
+            // Arithmetic
+            '+' -> vec.set(tape, ptr, vec.get(tape, ptr) + 1),
+            '-' -> vec.set(tape, ptr, vec.get(tape, ptr) - 1),
+
+            // Print/Read
+            '.' -> std.print(std.itoa(vec.get(tape, ptr))),
+            ',' -> vec.set(tape, ptr, std.read()),
+
+            // Recursion
+            '[' -> {
+                if vec.get(tape, ptr) == 0:
+                    for (var depth = 1; depth > 0; ++c):
+                        if #(code + c) == ']':
+                            --depth
+                        if #(code + c) == '[':
+                            ++depth
+            },
+            ']' -> {
+                if vec.get(tape, ptr) != 0:
+                    for (var depth = 1; depth > 0; --c):
+                        if #(code + c) == '[':
+                            --depth
+                        if #(code + c) == ']':
+                            ++depth
+            },
+
+            _ -> return 1
+
+    return 0
