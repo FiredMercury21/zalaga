@@ -8,6 +8,7 @@ pub struct Id(pub usize);
 pub enum Constant {
     Num(i64),
     Float(f64),
+    Bool(bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]

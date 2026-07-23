@@ -316,6 +316,20 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             parse_return(code)?
         }
 
+        Ident(key) if key == "true" => {
+            code.pos -= 1;
+            code.new_expr(Const {
+                val: Constant::Bool(true),
+            })
+        }
+
+        Ident(key) if key == "false" => {
+            code.pos -= 1;
+            code.new_expr(Const {
+                val: Constant::Bool(false),
+            })
+        }
+
         // Match statement
         //Ident(key) if key == "match" => { code.pos -= 1; parse_match(code)? },
 
