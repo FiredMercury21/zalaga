@@ -1,8 +1,7 @@
 // This file is for demonstration purposes,
 // and is not necessarily the most efficient way to sort.
 
-//use std.mem
-//use std.rand
+use std
 
 struct int_arr:
     arr: &int,
@@ -18,13 +17,13 @@ fn quicksort(arr: int_arr) -> int_arr:
         if arr.size > 0:
             #arr
         else:
-            var empty: int_arr = int_arr[ arr = mem(0), size = 0 ]
+            var empty: int_arr = int_arr[ arr = std::mem(0), size = 0 ]
             return empty
     }
 
-    var lesser:  int_arr = int_arr[ arr = mem(arr.size * 4), size = 0 ]
-    var greater: int_arr = int_arr[ arr = mem(arr.size * 4), size = 0 ]
-    var equal:   int_arr = int_arr[ arr = mem(arr.size * 4), size = 0 ]
+    var lesser:  int_arr = int_arr[ arr = std::mem(arr.size * 4), size = 0 ]
+    var greater: int_arr = int_arr[ arr = std::mem(arr.size * 4), size = 0 ]
+    var equal:   int_arr = int_arr[ arr = std::mem(arr.size * 4), size = 0 ]
 
     for (var i: int = 0; i < arr.size; ++i):
         var elem: int = #(arr.arr + i)
@@ -38,16 +37,16 @@ fn quicksort(arr: int_arr) -> int_arr:
             #(equal.arr + i) = elem
             ++equal.size
 
-    var output:  int_arr = int_arr[ arr = mem(arr.size), size = arr.size ]
+    var output:  int_arr = int_arr[ arr = std::mem(arr.size), size = arr.size ]
     copy_arr(output, quicksort(lesser), 0)
     copy_arr(output, quicksort(greater), lesser.size)
     copy_arr(output, quicksort(equal), (lesser.size + greater.size))
-    
+
     return output
 
 fn main() -> void:
-    var arr: int_arr = int_arr[ arr = mem(5 * 4), size = 5 ]
-    #(arr.arr + 0) = 2
+    var arr: int_arr = int_arr[ arr = std::mem(5 * 4), size = 5 ]
+    #(arr.arr + 0) = 31
     #(arr.arr + 1) = 0-1
     #(arr.arr + 2) = 4
     #(arr.arr + 3) = 6

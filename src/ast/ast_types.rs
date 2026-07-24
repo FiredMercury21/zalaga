@@ -9,6 +9,15 @@ pub enum Constant {
     Num(i64),
     Float(f64),
     Bool(bool),
+    Char(char),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    All,
+    Var { name: String },
+    Val { val: Constant },
+    Variant { name: String, payload: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -34,7 +43,7 @@ pub struct Expr {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprType {
     Var {
-        name: String,
+        path: Path,
     },
     Match {
         expr: Box<Expr>,
@@ -49,7 +58,7 @@ pub enum ExprType {
         scope: Vec<Node>,
     },
     FnCall {
-        name: String,
+        path: Path,
         args: Vec<Expr>,
     },
     Const {
@@ -60,11 +69,11 @@ pub enum ExprType {
         field: String,
     },
     Struct {
-        name: String,
+        path: Path,
         fields: Vec<Expr>, // Each is a BinOp with Operator::Assign.
     },
     Enum {
-        name: String,
+        path: Path,
         variant: String,
         val: Option<Box<Expr>>,
     },
@@ -80,9 +89,7 @@ pub enum ExprType {
     Return {
         val: Option<Box<Expr>>,
     },
-    Break {
-        val: Option<Box<Expr>>,
-    },
+    Break,
     Continue,
 }
 
@@ -107,7 +114,7 @@ pub enum NodeType {
         var_type: Box<Node>,
     },
     Guard {
-        pred: Expr,
+        patt: Pattern,
         expr: Expr,
     },
     StructDec {
@@ -129,7 +136,8 @@ pub enum NodeType {
         block: Expr,
     },
     Use {
-        name: Box<Node>,
+        name: String,
+        root: Box<Node>,
     },
     // TODO: Make 'Type' its own type.
     // It kinda already is. Why'd I use a Node??
@@ -147,7 +155,60 @@ pub struct EnumVariant {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeNode {
     Ref(Box<TypeNode>),
-    Base(String),
+    Base(Path),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Path(pub Vec<String>);
+
+impl Path {
+    pub fn new() -> Self {
+        Self(vec![])
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        Self(vec![s.to_string()])
+    }
+
+    pub fn push(&mut self, name: String) {
+        self.0.push(name);
+    }
+
+    pub fn pop(&mut self) {
+        self.0.pop();
+    }
+
+    pub fn first(&self) -> String {
+        self.0[0].clone()
+    }
+
+    pub fn pop_first(&mut self) {
+        self.0.remove(0);
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn base(&self) -> String {
+        self.0[self.0.len() - 1].clone()
+    }
+
+    pub fn fname(&self) -> String {
+        self.0[self.0.len() - 2].clone()
+    }
+
+    pub fn is_module_path(&self) -> bool {
+        self.0.len() > 1
+    }
+
+    pub fn module_path(&self) -> Vec<String> {
+        self.0[..self.0.len() - 1].to_vec()
+    }
+
+    pub fn vec(&self) -> Vec<String> {
+        self.0.clone()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +217,8 @@ pub enum ParseErrorType {
     BadRef,
     BadAtom,
     BadExpr,
+    BadPath,
+    BadPattern,
     FnNoRetType,
     FnNoParen,
     FnNoName,
@@ -184,6 +247,10 @@ pub enum ParseErrorType {
     UnclosedBrack,
     InvalidKeyword,
     InvalidField,
+    ModuleAccessWithoutField,
+    ModuleNotFound,
+    ImportNoName,
+    ImportNoAlias,
     InvalidSyntax,
     UnexpectedEof,
     ScopeError,

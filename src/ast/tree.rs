@@ -69,29 +69,28 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
 // Find appropriate parse function.
 fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(match code.peek() {
-        Some(Ident(ident)) => {
-            match ident.as_str() {
-                "fn" => parse_fn_dec(code)?,
-                "var" => parse_var_dec(code)?,
-                "enum" => parse_enum_dec(code)?,
-                "struct" => parse_struct_dec(code)?,
-                //"use"  => parse_use(code)?,
-                "for" => parse_for(code)?,
-                "while" => parse_while(code)?,
+        Some(Ident(ident)) => match ident.as_str() {
+            "fn" => parse_fn_dec(code)?,
+            "var" => parse_var_dec(code)?,
+            "enum" => parse_enum_dec(code)?,
+            "struct" => parse_struct_dec(code)?,
+            "use" => parse_use(code)?,
+            "for" => parse_for(code)?,
+            "while" => parse_while(code)?,
 
-                _ => {
-                    let expr = parse_expr(code, 0)?;
-                    code.new_node(Statement { expr })
-                }
+            _ => {
+                let expr = parse_expr(code, 0)?;
+                code.new_node(Statement { expr })
             }
-        }
+        },
 
-        // If the thing is a pointer or in brackets, it's an expression.
-        Some(Op(..) | LBrack) => {
+        // If the thing has a unary op or is in brackets, it's an expression.
+        Some(Op(_) | LBrack) => {
             let expr = parse_expr(code, 0)?;
             code.new_node(Statement { expr })
         }
 
+        // I believe this is already handled by parse_expr. We can probably use parse_expr.
         Some(Indent | LSquirl) => {
             let expr = parse_block(code)?;
             code.new_node(Statement { expr })
@@ -260,7 +259,6 @@ fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
     Ok(args)
 }
 
-// TODO: Add match arms for keywords like match, if, etc.
 // TODO: Treat a Sub at the start as a negative sign. var a: int = -3.
 fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
     // func( (a / 2), 3);
@@ -282,6 +280,14 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             val: Constant::Num(num.parse().unwrap()),
         }),
 
+        Float(num) => code.new_expr(Const {
+            val: Constant::Float(num.parse().unwrap()),
+        }),
+
+        Char(c) => code.new_expr(Const {
+            val: Constant::Char(c),
+        }),
+
         // Bracketed expressions.
         LBrack => {
             let expr = parse_expr(code, 0)?;
@@ -290,7 +296,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         }
 
         // Block expressions.
-        LSquirl => parse_block(code)?,
+        LSquirl | Indent => parse_block(code)?,
 
         // Unary operators.
         Op(op) if is_un_op(&op) => {
@@ -304,11 +310,11 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             parse_if(code)?
         }
 
-        // Break statement
-        Ident(key) if key == "break" => {
-            code.pos -= 1;
-            parse_break(code)?
-        }
+        // Break
+        Ident(key) if key == "break" => code.new_expr(Break),
+
+        // Continue
+        Ident(key) if key == "continue" => code.new_expr(Continue),
 
         // Return statement
         Ident(key) if key == "return" => {
@@ -316,56 +322,51 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             parse_return(code)?
         }
 
-        Ident(key) if key == "true" => {
-            code.pos -= 1;
-            code.new_expr(Const {
-                val: Constant::Bool(true),
-            })
-        }
+        Ident(key) if key == "true" => code.new_expr(Const {
+            val: Constant::Bool(true),
+        }),
 
-        Ident(key) if key == "false" => {
-            code.pos -= 1;
-            code.new_expr(Const {
-                val: Constant::Bool(false),
-            })
-        }
+        Ident(key) if key == "false" => code.new_expr(Const {
+            val: Constant::Bool(false),
+        }),
 
         // Match statement
-        //Ident(key) if key == "match" => { code.pos -= 1; parse_match(code)? },
-
-        // Function calls.
-        Ident(name) if matches!(code.peek(), Some(LBrack)) => {
-            let args = parse_fn_args(code)?;
-            code.new_expr(FnCall { name, args })
+        Ident(key) if key == "match" => {
+            code.pos -= 1;
+            parse_match(code)?
         }
 
-        // Struct def.
-        Ident(name) if matches!(code.peek(), Some(LSquare)) => {
-            let fields = parse_struct(code)?;
-            code.new_expr(Struct { name, fields })
-        }
-
-        // Enum variant.
-        // Maybe I should make parse_expr(). Prob not.
+        // Enum literal.
         Ident(variant) if matches!(code.peek(), Some(At)) => {
             // variant@myenum[ val ]
-            // emptyvar@myenum
+            // empty@myenum
 
             code.expect(At)?;
-            let name = code.expect_ident()?;
-            let val = if code.peek() == Some(LSquare) {
-                code.next();
-                let payload = Box::new(parse_expr(code, 0)?);
-                code.expect(RSquare)?;
-                Some(payload)
-            } else {
-                None
-            };
+            // TODO: Replace with something that respects module paths!
+            let path = parse_path(code)?;
+            let val = parse_enum(code)?;
 
-            code.new_expr(Enum { name, variant, val })
+            code.new_expr(Enum { path, variant, val })
         }
 
-        Ident(name) => code.new_expr(Var { name }),
+        Ident(_) => {
+            code.pos -= 1;
+            let path = parse_path(code)?;
+            match code.peek() {
+                // Function call.
+                Some(LBrack) => {
+                    let args = parse_fn_args(code)?;
+                    code.new_expr(FnCall { path, args })
+                }
+                // Struct literal.
+                Some(LSquare) => {
+                    let fields = parse_struct(code)?;
+                    code.new_expr(Struct { path, fields })
+                }
+                // Variable.
+                _ => code.new_expr(Var { path }),
+            }
+        }
 
         _ => {
             return Err(ParseError {
@@ -377,15 +378,17 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
 
     loop {
         // Field access. Duplicates parse_atom, because that doesn't work on structs. Refactor?
-        while matches!(code.peek(), Some(Period)) {
+        if matches!(code.peek(), Some(Period)) {
             code.next();
             let field = code.expect_ident_else(InvalidField)?;
             current = code.new_expr(Field {
                 base: Box::new(current),
                 field,
             });
+            continue;
         }
 
+        // Pratt Parser: Binary Operators!
         let Some(Op(op)) = code.peek() else { break };
         if !is_bin_op(&op) {
             break;
@@ -407,9 +410,6 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
 
     Ok(current)
 }
-
-// TODO: Match.
-// Those are related. How to handle enum syntax?
 
 fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
     // for (
@@ -447,46 +447,109 @@ fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(code.new_node(While { pred, block }))
 }
 
-/*
- * This doesn't actually work right... Didn't add comparison.
-fn parse_match(code: &mut Cursor) -> Result<Node, ParseError> {
+fn parse_match(code: &mut Cursor) -> Result<Expr, ParseError> {
     code.expect_ident()?;
-    parse_expr(code, 0)?;
+    let expr = Box::new(parse_expr(code, 0)?);
     code.expect(Colon)?;
     code.expect(Newline)?;
     code.expect(Indent)?;
 
-    let mut guards = Vec::new();
+    let mut grds = Vec::new();
     loop {
         if Some(Guard) != code.peek() {
             break;
         }
         code.next();
-        let pred = Box::new(parse_expr(code, 0)?);
+        let patt = parse_pattern(code)?;
         code.expect(Arrow)?;
-        let expr: Box<Node> = Box::new(parse_expr(code, 0)?);
-        guards.push(Node::Guard {
-            pred: pred,
-            expr: expr,
-        });
+
+        // We make the expr a block because it has its own scope.
+        let then_expr = parse_expr(code, 0)?;
+        let block_scope = vec![code.new_node(NodeType::Statement { expr: then_expr })];
+        let expr = code.new_expr(Block { scope: block_scope });
+
+        grds.push(code.new_node(NodeType::Guard { patt, expr }));
         // Comma? Does expr consume last token?
         code.expect(Newline)?;
     }
 
-    Ok(Node::Match { grds: guards })
+    Ok(code.new_expr(Match { expr, grds }))
 }
-*/
 
-fn parse_break(code: &mut Cursor) -> Result<Expr, ParseError> {
+fn parse_pattern(code: &mut Cursor) -> Result<Pattern, ParseError> {
+    // x
+    // 3
+    // Variant(x)
+    // _
+
+    // The four types of pattern! Val, Var, Variant, All.
+    Ok(match code.next() {
+        Some(Ident(var)) => match code.peek() {
+            // Variant
+            Some(LBrack) => {
+                code.next();
+                let payload = code.expect_ident_else(BadPattern)?;
+                code.expect_else(RBrack, BadPattern)?;
+                Pattern::Variant { name: var, payload }
+            }
+
+            // Variable
+            _ => Pattern::Var { name: var },
+        },
+
+        // Values
+        Some(Num(num)) => Pattern::Val {
+            val: Constant::Num(num.parse().unwrap()),
+        },
+        Some(Float(num)) => Pattern::Val {
+            val: Constant::Float(num.parse().unwrap()),
+        },
+        Some(Char(c)) => Pattern::Val {
+            val: Constant::Char(c),
+        },
+
+        // All
+        Some(Underscore) => Pattern::All,
+
+        _ => {
+            return Err(ParseError {
+                err: ParseErrorType::BadPattern,
+                span: code.last_idx(),
+            });
+        }
+    })
+}
+
+fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
+    // use std
+    // use std::vec
+    // use std::vec@alias
+    // use longfilename@alias
+
+    use crate::cli::utils::load_file;
+
     code.expect_ident()?;
-
-    let val = match code.peek() {
-        // What other tokens mean no expr?
-        Some(Newline) => None,
-        _ => Some(Box::new(parse_expr(code, 0)?)),
+    let module_name = parse_path(code)?;
+    let mod_ast = match load_file(module_name.vec()) {
+        Ok(file_str) => {
+            let tokens = tokenize_code(&file_str);
+            let fname = module_name.base(); // base() and not fname().
+            parse_file(tokens, &fname)?
+        }
+        Err(_) => {
+            return Err(ParseError {
+                err: ParseErrorType::ModuleNotFound,
+                span: code.last_idx(),
+            });
+        }
     };
-
-    Ok(code.new_expr(Break { val }))
+    let root = Box::new(mod_ast);
+    let name = if matches!(code.peek(), Some(At)) {
+        code.expect_ident_else(ParseErrorType::ImportNoAlias)?
+    } else {
+        module_name.base()
+    };
+    Ok(code.new_node(Use { name, root }))
 }
 
 fn parse_return(code: &mut Cursor) -> Result<Expr, ParseError> {
@@ -544,6 +607,16 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(code.new_node(EnumDec { name, variants }))
 }
 
+fn parse_enum(code: &mut Cursor) -> Result<Option<Box<Expr>>, ParseError> {
+    if code.peek() != Some(LSquare) {
+        return Ok(None);
+    }
+    code.expect_else(LSquare, EnumBadSyntax)?;
+    let payload = Box::new(parse_expr(code, 0)?);
+    code.expect_else(RSquare, EnumBadSyntax)?;
+    Ok(Some(payload))
+}
+
 fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
     let name = code.expect_ident()?;
@@ -587,14 +660,19 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
     code.expect(LSquare)?;
     let mut fields = Vec::new();
     while let Some(Ident(field)) = code.next() {
+        let path = Path::from_str(&field);
+        let first = Box::new(code.new_expr(Var { path }));
+
         code.expect_else(Op(Operator::Assign), StructNoFieldInit)?;
-        let val = parse_expr(code, 0)?;
-        let field_var = code.new_expr(Var { name: field });
+
+        let second = Box::new(parse_expr(code, 0)?);
+
         fields.push(code.new_expr(BinOp {
-            first: Box::new(field_var),
+            first,
             op: Operator::Assign,
-            second: Box::new(val),
+            second,
         }));
+
         match code.next() {
             Some(RSquare) => {
                 code.expect(Newline)?;
@@ -613,6 +691,19 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
     }
 
     Ok(fields)
+}
+
+fn parse_path(code: &mut Cursor) -> Result<Path, ParseError> {
+    let mut path = Path::new();
+    // Refactor.
+    while let Some(Ident(segment)) = code.peek() {
+        code.next();
+        path.push(segment);
+        if !matches!(code.peek(), Some(Separator)) {
+            break;
+        }
+    }
+    Ok(path)
 }
 
 fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
@@ -663,8 +754,13 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
             name: {
                 let mut ref_n = 0;
                 let mut base = loop {
-                    match code.next() {
-                        Some(Ident(type_string)) => break Base(type_string),
+                    // Find base type, track reference number.
+                    match code.peek() {
+                        // Base type.
+                        Some(Ident(_)) => {
+                            break Base(parse_path(code)?);
+                        }
+                        // Track number of references.
                         Some(Op(Operator::Ref)) => ref_n += 1,
                         // Ewww. To handle '&&' turning into 'And' in lexer.
                         Some(Op(Operator::And)) => ref_n += 2,
@@ -676,6 +772,7 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
                         }
                     }
                 };
+                // Wrap the type in counted references.
                 for _ in 0..ref_n {
                     base = Ref(Box::new(base));
                 }

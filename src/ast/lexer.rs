@@ -53,12 +53,16 @@ pub enum TokType {
     Arrow,
     Period,
     At,
+    Underscore,
+    Separator,
 
     // Operators
     Op(Operator),
 
     // Constants
     Num(String),
+    Float(String),
+    Char(char),
 
     // Identifiers
     Ident(String),
@@ -152,10 +156,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     idx += 1;
                     RSquare
                 }
-                ':' => {
-                    idx += 1;
-                    Colon
-                }
+
                 ';' => {
                     idx += 1;
                     SColon
@@ -167,6 +168,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '.' => {
                     idx += 1;
                     Period
+                }
+
+                '_' => {
+                    idx += 1;
+                    Underscore
                 }
 
                 '@' => {
@@ -248,6 +254,18 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     }
                 },
 
+                ':' => match look.peek() {
+                    Some(':') => {
+                        look.next();
+                        idx += 2;
+                        Separator
+                    }
+                    _ => {
+                        idx += 1;
+                        Colon
+                    }
+                },
+
                 '+' => match look.peek() {
                     Some('+') => {
                         look.next();
@@ -308,6 +326,24 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     }
                 },
 
+                '\'' => match look.next() {
+                    Some(x) => match look.peek() {
+                        Some('\'') => {
+                            look.next();
+                            idx += 2;
+                            Char(x)
+                        }
+                        _ => {
+                            idx += 1;
+                            Illegal(c) // x is lost!! Bad. But only in bad syntax.
+                        }
+                    },
+                    _ => {
+                        idx += 1;
+                        Illegal(c)
+                    }
+                },
+
                 '/' => match look.peek() {
                     // Comments
                     Some('/') => {
@@ -325,16 +361,16 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 c if c.is_ascii_digit() => {
                     let dig = c.to_string()
                         + &(look.peek_while::<_, String>(|c: &char| c.is_ascii_digit()));
-                    let post = match look.peek() {
-                        Some('.') => {
-                            look.next();
-                            look.peek_while::<_, String>(|c: &char| c.is_ascii_digit())
-                        }
-                        _ => String::new(),
-                    };
-                    let num = dig + &post;
-                    idx += num.len();
-                    Num(num)
+                    if Some(&'.') == look.peek() {
+                        look.next();
+                        let post = look.peek_while::<_, String>(|c: &char| c.is_ascii_digit());
+                        let num = dig + &post;
+                        idx += num.len();
+                        Float(num)
+                    } else {
+                        idx += dig.len();
+                        Num(dig)
+                    }
                 }
 
                 // Identifier, or...
