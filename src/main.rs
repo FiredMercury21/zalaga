@@ -4,6 +4,9 @@ pub mod ir;
 pub mod semantics;
 pub mod utils;
 
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
 fn main() {
-    println!("Hello, world!");
+    cli::cli::run();
 }

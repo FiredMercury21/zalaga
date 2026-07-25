@@ -1,10 +1,8 @@
-use std::fs::File;
-use std::io::Read;
+use std::fs;
 
 pub fn load_file(path: Vec<String>) -> Result<String, std::io::Error> {
-    let fpath = path.join("/") + ".zg";
-    let mut file = File::open(fpath)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
+    let fpath = "examples/".to_string() + &path.join("/") + ".zg";
+    println!("fpath: {}", fpath);
+    let contents = fs::read_to_string(fpath)?;
     Ok(contents)
 }
