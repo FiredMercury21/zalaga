@@ -545,6 +545,7 @@ fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
     };
     let root = Box::new(mod_ast);
     let name = if matches!(code.peek(), Some(At)) {
+        code.next();
         code.expect_ident_else(ParseErrorType::ImportNoAlias)?
     } else {
         module_name.base()
@@ -699,10 +700,7 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
         }));
 
         match code.next() {
-            Some(RSquare) => {
-                code.expect(Newline)?;
-                break;
-            }
+            Some(RSquare) => break,
 
             Some(Comma) => continue,
 
@@ -720,11 +718,11 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
 
 fn parse_path(code: &mut Cursor) -> Result<Path, ParseError> {
     let mut path = Path::new();
-    // Refactor.
-    while let Some(Ident(segment)) = code.peek() {
-        code.next();
-        path.push(segment);
-        if !matches!(code.peek(), Some(Separator)) {
+    loop {
+        path.push(code.expect_ident_else(BadPath)?);
+        if matches!(code.peek(), Some(Separator)) {
+            code.next();
+        } else {
             break;
         }
     }
