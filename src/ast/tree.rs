@@ -572,8 +572,18 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_else(Indent, EnumNoBlock)?;
     let mut variants = Vec::new();
     loop {
+        let name = code.expect_ident()?;
+
+        // Check for any duplicate variants.
+        if variants.iter().any(|v: &EnumVariant| v.name == name) {
+            return Err(ParseError {
+                err: EnumDuplicateVariant,
+                span: code.last_idx(),
+            });
+        }
+
         variants.push(EnumVariant {
-            name: code.expect_ident()?,
+            name,
             var_type: {
                 match code.peek() {
                     Some(Colon) => {
@@ -626,6 +636,19 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 
     let mut fields = Vec::new();
     while let Some(Ident(field)) = code.next() {
+        // Check for any duplicate fields.
+        if fields.iter().any(|f: &Node| {
+            let VarDec { name, .. } = f.node.clone() else {
+                unreachable!()
+            };
+            name == field
+        }) {
+            return Err(ParseError {
+                err: StructDuplicateField,
+                span: code.last_idx(),
+            });
+        }
+
         code.expect(Colon)?;
         let var_type = Box::new(parse_type(code)?);
         fields.push(code.new_node(VarDec {
@@ -633,6 +656,8 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
             expr: None,
             var_type,
         }));
+
+        // Check for end of struct dec.
         match code.next() {
             Some(Newline) => {
                 code.expect(Dedent)?;
