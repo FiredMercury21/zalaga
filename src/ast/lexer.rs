@@ -303,7 +303,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 },
 
                 '!' => match look.peek() {
-                    Some('-') => {
+                    Some('=') => {
                         look.next();
                         idx += 2;
                         Op(NotET)
