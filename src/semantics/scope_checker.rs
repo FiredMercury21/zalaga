@@ -32,19 +32,19 @@ fn populate_scope(root: &Node) -> Result<ScopeTable, ScopeError> {
         scopes: Vec::new(),
         node_scope: HashMap::new(),
     };
-    let global = table.new_scope(None, root.id);
-    let Module { scope, .. } = &root.node else {
+    let global_id = table.new_scope(None, root.id); // Should be 0.
+    let Module { global, .. } = &root.node else {
         unreachable!()
     };
 
     // Small pass for declarations.
-    for node in scope {
-        register_dec(&mut table, node, global)?;
+    for node in global {
+        register_dec(&mut table, node, global_id)?;
     }
 
     // Check scope of everything.
-    for node in scope {
-        scope_node(&mut table, node, global)?;
+    for node in global {
+        scope_node(&mut table, node, global_id)?;
     }
 
     Ok(table)
@@ -366,15 +366,15 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
                 scope_expr(table, else_block, current)?;
             }
         }
-        Block { scope } => {
+        Block { lines } => {
             // The only expression that has its own scope!
             // Use it in others if you want...
             let idx = table.new_scope(Some(current), expr.id);
-            for node in scope {
+            for node in lines {
                 // Declarations.
                 register_dec(table, node, idx)?;
             }
-            for node in scope {
+            for node in lines {
                 // Scopes.
                 scope_node(table, node, idx)?;
             }

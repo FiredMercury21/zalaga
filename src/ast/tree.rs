@@ -114,7 +114,7 @@ pub fn parse_file(code: Vec<Token>, name: &str) -> Result<Node, ParseError> {
         node_id: Id(0),
     };
 
-    let mut scope = Vec::new();
+    let mut global = Vec::new();
 
     while let Some(token) = cursor.peek() {
         match token {
@@ -126,13 +126,13 @@ pub fn parse_file(code: Vec<Token>, name: &str) -> Result<Node, ParseError> {
                 cursor.next();
                 continue;
             }
-            _ => scope.push(match_to_parse(&mut cursor)?),
+            _ => global.push(match_to_parse(&mut cursor)?),
         }
     }
 
     Ok(cursor.new_node(Module {
         name: name.to_owned(),
-        scope,
+        global,
     }))
 }
 
@@ -158,7 +158,7 @@ fn parse_block(code: &mut Cursor) -> Result<Expr, ParseError> {
         }
     }
 
-    Ok(code.new_expr(ExprType::Block { scope: statements }))
+    Ok(code.new_expr(ExprType::Block { lines: statements }))
 }
 
 fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -466,7 +466,7 @@ fn parse_match(code: &mut Cursor) -> Result<Expr, ParseError> {
         // We make the expr a block because it has its own scope.
         let then_expr = parse_expr(code, 0)?;
         let block_scope = vec![code.new_node(NodeType::Statement { expr: then_expr })];
-        let expr = code.new_expr(Block { scope: block_scope });
+        let expr = code.new_expr(Block { lines: block_scope });
 
         grds.push(code.new_node(NodeType::Guard { patt, expr }));
         // Comma? Does expr consume last token?

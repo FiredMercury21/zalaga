@@ -55,7 +55,7 @@ pub enum ExprType {
         else_block: Option<Box<Expr>>,
     },
     Block {
-        scope: Vec<Node>,
+        lines: Vec<Node>,
     },
     FnCall {
         path: Path,
@@ -97,7 +97,7 @@ pub enum ExprType {
 pub enum NodeType {
     Module {
         name: String,
-        scope: Vec<Node>, // TODO: Should rename this 'global'.
+        global: Vec<Node>,
     },
     FnDec {
         name: String,
