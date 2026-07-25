@@ -180,11 +180,23 @@ pub enum TypeCheckErrorType {
     VariantOnNonEnum {
         ty: Type,
     },
+    VariantNotInEnum {
+        ty: Type,
+        variant: String,
+    },
+    // Want this to contain variants not found.
+    EnumVariantMissing {
+        expected: String,
+    },
+    UnexpectedVariantPattern {
+        patt: Pattern,
+    },
     ValOnBlankVariant {
         ty: Type,
         variant: String,
         val: Expr,
     },
+    ValWhenDestructEnum,
     FieldOnNonStruct {
         ty: Type,
         field: String,
