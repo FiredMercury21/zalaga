@@ -85,7 +85,7 @@ fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
                     break;
                 }
                 if let Some(ty) = table.get_type(path, idx) {
-                    base = ty;
+                    base = ty.to_owned();
                     break;
                 }
                 return None;

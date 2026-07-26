@@ -282,12 +282,13 @@ impl ScopeTable {
         idx
     }
 
-    fn find_in_scope(&self, path: &Path, current: usize, ty: ScopeType) -> Option<Type> {
-        let mut current_scope = self.scopes[current].clone(); // Perf hit. Is Box/Vec cloned?
+    fn find_in_scope(&self, path: &Path, current: usize, ty: ScopeType) -> Option<&Type> {
+        let mut current_id = current;
+        let mut current_scope = &self.scopes[current_id];
         if path.is_module_path() {
-            for segment in path.0.clone() {
-                if let Some(module_scope) = self.get_module(&segment, &current_scope) {
-                    current_scope = module_scope.scopes[0].clone(); // Perf hit.
+            for segment in &path.0 {
+                if let Some(module_scope) = self.get_module(&segment, current_id) {
+                    current_scope = &module_scope.scopes[0];
                 } else {
                     return None;
                 }
@@ -298,45 +299,42 @@ impl ScopeTable {
             match ty {
                 ScopeType::Vars => {
                     if current_scope.vars.contains_key(name) {
-                        return Some(current_scope.vars[name].clone());
+                        return Some(&current_scope.vars[name]);
                     }
                 }
                 ScopeType::Types => {
                     if current_scope.types.contains_key(name) {
-                        return Some(current_scope.types[name].clone());
+                        return Some(&current_scope.types[name]);
                     }
                 }
                 ScopeType::Functions => {
                     if current_scope.functions.contains_key(name) {
-                        return Some(current_scope.functions[name].clone());
+                        return Some(&current_scope.functions[name]);
                     }
                 }
             }
-            current_scope =
-                // Go to parent scope.
-                match current_scope.parent {
-                    Some(parent) => self.scopes[parent].clone(), // Perf hit.
-                    None => return None,
-                }
+            // Go to parent scope.
+            current_id = current_scope.parent?;
+            current_scope = &self.scopes[current_id];
         }
     }
 
     // Checks scope and all parent scopes to see if the fn/var/type is defined.
-    pub fn get_var(&self, path: &Path, current: usize) -> Option<Type> {
+    pub fn get_var(&self, path: &Path, current: usize) -> Option<&Type> {
         self.find_in_scope(path, current, ScopeType::Vars)
     }
-    pub fn get_type(&self, path: &Path, current: usize) -> Option<Type> {
+    pub fn get_type(&self, path: &Path, current: usize) -> Option<&Type> {
         self.find_in_scope(path, current, ScopeType::Types)
     }
-    pub fn get_fn(&self, path: &Path, current: usize) -> Option<Type> {
+    pub fn get_fn(&self, path: &Path, current: usize) -> Option<&Type> {
         self.find_in_scope(path, current, ScopeType::Functions)
     }
 
-    pub fn get_module(&self, name: &str, current: &Scope) -> Option<ScopeTable> {
-        let mut current_scope = current;
+    pub fn get_module(&self, name: &str, current: usize) -> Option<&ScopeTable> {
+        let mut current_scope = &self.scopes[current];
         loop {
             if current_scope.modules.contains_key(name) {
-                return Some(current_scope.modules[name].clone()); // Perf hit?
+                return Some(&current_scope.modules[name]);
             }
             // Go to parent scope.
             match current_scope.parent {
