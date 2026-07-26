@@ -4,24 +4,26 @@ use crate::semantics::types::*;
 use std::collections::HashMap;
 
 // String to primitive type
-fn str_to_prim(input_str: &str) -> Option<Prim> {
-    use Prim::*;
+impl std::str::FromStr for Prim {
+    type Err = ();
+    fn from_str(ty_str: &str) -> Result<Self, ()> {
+        use Prim::*;
+        Ok(match ty_str {
+            "char" => Char,
+            "short" => Int16,
+            "int" => Int32,
+            "long" => Int64,
+            "half" => Float16,
+            "float" => Float32,
+            "double" => Float64,
+            "bool" => Bool,
+            //"str" => String,
+            "void" => Void,
+            "never" => Never,
 
-    Some(match input_str {
-        "char" => Char,
-        "short" => Int16,
-        "int" => Int32,
-        "long" => Int64,
-        "half" => Float16,
-        "float" => Float32,
-        "double" => Float64,
-        "bool" => Bool,
-        //"str" => String,
-        "void" => Void,
-        "never" => Never,
-
-        _ => return None,
-    })
+            _ => return Err(()),
+        })
+    }
 }
 
 // Populates scope table for AST root node, checking
@@ -80,7 +82,7 @@ fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
     loop {
         match current {
             TypeNode::Base(path) => {
-                if let Some(ty) = str_to_prim(&path.base()) {
+                if let Ok(ty) = path.base().parse::<Prim>() {
                     base = TypeType::Prim(ty).to_type();
                     break;
                 }
