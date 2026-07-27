@@ -29,19 +29,19 @@ pub struct Node {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
-    pub err: ParseErrorType,
+    pub err: ParseErrorKind,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
-    pub expr: ExprType,
+    pub expr: ExprKind,
     pub span: Span,
     pub id: Id,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExprType {
+pub enum ExprKind {
     Var {
         path: Path,
     },
@@ -94,7 +94,7 @@ pub enum ExprType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum NodeType {
+pub enum NodeKind {
     Module {
         name: String,
         global: Vec<Node>,
@@ -194,8 +194,8 @@ impl Path {
         self.0[self.0.len() - 1].clone()
     }
 
-    pub fn fname(&self) -> String {
-        self.0[self.0.len() - 2].clone()
+    pub fn fname(&self) -> Option<String> {
+        self.0.get(self.0.len() - 2).cloned()
     }
 
     pub fn is_module_path(&self) -> bool {
@@ -212,7 +212,7 @@ impl Path {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ParseErrorType {
+pub enum ParseErrorKind {
     BadDeref,
     BadRef,
     BadAtom,
@@ -294,7 +294,7 @@ impl Cursor {
         // Usually we use this function after we read a bad token.
         match self.stream.get(self.pos - 1) {
             Some(tok) => tok.index.clone(),
-            None => self.stream[self.pos - 2].index.clone(),
+            None => self.stream[self.pos.saturating_sub(2)].index.clone(),
         }
     }
 
@@ -303,7 +303,7 @@ impl Cursor {
         self.node_id
     }
 
-    // Expect a certain token, else err.
+    /// Expect a given token, else err generic.
     pub fn expect(&mut self, expected: TokType) -> Result<(), ParseError> {
         match self.next() {
             Some(token) if token == expected => Ok(()),
@@ -314,7 +314,7 @@ impl Cursor {
         }
     }
 
-    // Expect a certain token, else err with given error.
+    /// Expect a given token, else err with given error.
     pub fn expect_else(
         &mut self,
         expected: TokType,
@@ -329,7 +329,7 @@ impl Cursor {
         }
     }
 
-    // Expect an ident, return it else err.
+    /// Expect an Ident token, return it as a String, else err generic.
     pub fn expect_ident(&mut self) -> Result<String, ParseError> {
         match self.next() {
             Some(Ident(ident)) => Ok(ident),
@@ -340,7 +340,7 @@ impl Cursor {
         }
     }
 
-    // Expect an ident, return it else err with given error.
+    /// Expect an Ident token, return it as a String, else err with given error.
     pub fn expect_ident_else(&mut self, error: ParseErrorType) -> Result<String, ParseError> {
         match self.next() {
             Some(Ident(ident)) => Ok(ident),

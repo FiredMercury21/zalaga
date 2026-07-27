@@ -1,6 +1,6 @@
-use super::ast_types::ExprType::*;
-use super::ast_types::NodeType::*;
-use super::ast_types::ParseErrorType::*;
+use super::ast_types::ExprKind::*;
+use super::ast_types::NodeKind::*;
+use super::ast_types::ParseErrorKind::*;
 use super::ast_types::*;
 
 use super::lexer::TokType::*;
@@ -144,9 +144,10 @@ fn parse_block(code: &mut Cursor) -> Result<Expr, ParseError> {
         code.next();
     }
 
+    // Check for terminators, otherwise push nodified line to statements.
     while let Some(token) = code.peek() {
         match token {
-            Dedent | Eof | RSquirl => {
+            Dedent | RSquirl => {
                 code.next();
                 break;
             }
@@ -154,6 +155,8 @@ fn parse_block(code: &mut Cursor) -> Result<Expr, ParseError> {
                 code.next();
                 continue;
             }
+            Eof => break,
+
             _ => statements.push(match_to_parse(code)?),
         }
     }
@@ -636,8 +639,11 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_else(Indent, StructNoBlock)?;
 
     let mut fields = Vec::new();
-    while let Some(Ident(field)) = code.next() {
+    loop {
+        let field = code.expect_ident_else(StructBadSyntax)?;
+
         // Check for any duplicate fields.
+        // Maybe use HashMap instead of Vec?
         if fields.iter().any(|f: &Node| {
             let VarDec { name, .. } = f.node.clone() else {
                 unreachable!()
@@ -685,7 +691,9 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
     code.expect(LSquare)?;
     let mut fields = Vec::new();
-    while let Some(Ident(field)) = code.next() {
+    loop {
+        let field = code.expect_ident_else(StructBadSyntax)?;
+
         let path = Path::from_str(&field);
         let first = Box::new(code.new_expr(Var { path }));
 
@@ -742,16 +750,15 @@ fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
 
     code.expect_else(Colon, IfNoBlock)?;
     code.expect_else(Newline, IfNoBlock)?;
-    code.expect_else(Indent, IfNoBlock)?;
 
     let then = Box::new(parse_block(code)?);
 
-    // Weird syntax? Maybe rewrite.
     let else_block = if let Some(Ident(tok)) = code.peek() {
         match tok.as_str() {
             "else" => {
                 code.next();
                 code.expect_else(Colon, IfNoBlock)?;
+                code.expect_else(Newline, IfNoBlock)?;
                 Some(Box::new(parse_block(code)?))
             }
             "elif" => Some(Box::new(parse_if(code)?)),

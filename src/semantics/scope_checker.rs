@@ -1,4 +1,3 @@
-use crate::ast::ast_types::NodeType::Module;
 use crate::ast::ast_types::*;
 use crate::semantics::types::*;
 use std::collections::HashMap;
@@ -35,18 +34,18 @@ fn populate_scope(root: &Node) -> Result<ScopeTable, ScopeError> {
         node_scope: HashMap::new(),
     };
     let global_id = table.new_scope(None, root.id); // Should be 0.
-    let Module { global, .. } = &root.node else {
+    let NodeKind::Module { global, .. } = &root.node else {
         unreachable!()
     };
 
     // Small pass for declarations.
     for node in global {
-        register_dec(&mut table, node, global_id)?;
+        register_dec(&mut table, &node, global_id)?;
     }
 
     // Check scope of everything.
     for node in global {
-        scope_node(&mut table, node, global_id)?;
+        scope_node(&mut table, &node, global_id)?;
     }
 
     Ok(table)
@@ -86,7 +85,7 @@ fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
                     base = TypeType::Prim(ty).to_type();
                     break;
                 }
-                if let Some(ty) = table.get_type(path, idx) {
+                if let Some(ty) = table.get_type(&path, idx) {
                     base = ty.to_owned();
                     break;
                 }
@@ -109,21 +108,21 @@ fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
 
 // Checks scope of a node!
 fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(), ScopeError> {
-    use NodeType::*;
+    use NodeKind::*;
 
     match &node.node {
         // Handled by other guards using register_dec() on blocks.
         FnDec { .. } | StructDec { .. } | EnumDec { .. } | VarDec { .. } => {}
 
         Statement { expr } => {
-            scope_expr(table, expr, current)?;
+            scope_expr(table, &expr, current)?;
         }
 
         Guard { patt, expr } => {
             use Pattern::*;
 
             match patt {
-                All | Val { .. } => scope_expr(table, expr, current)?,
+                All | Val { .. } => scope_expr(table, &expr, current)?,
                 Variant { payload: var, .. } | Var { name: var } => {
                     // expr is a block. We need to inject bound var or payload into it.
                     // For now, put the placeholder type of Never on the var.
@@ -132,7 +131,7 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
                     table.scopes[idx]
                         .vars
                         .insert(var.clone(), self::Type::never());
-                    scope_expr(table, expr, idx)?;
+                    scope_expr(table, &expr, idx)?;
                 }
             }
         }
@@ -151,22 +150,22 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
             let idx = table.new_scope(Some(current), block.id);
 
             // Add var to for block scope.
-            register_dec(table, init, idx)?;
+            register_dec(table, &init, idx)?;
 
             // Check scopes underneath.
-            scope_expr(table, pred, idx)?;
-            scope_expr(table, then, idx)?;
-            scope_expr(table, block, idx)?;
+            scope_expr(table, &pred, idx)?;
+            scope_expr(table, &then, idx)?;
+            scope_expr(table, &block, idx)?;
         }
 
         While { pred, block } => {
             let idx = table.new_scope(Some(current), block.id);
-            scope_expr(table, pred, idx)?;
-            scope_expr(table, block, idx)?;
+            scope_expr(table, &pred, idx)?;
+            scope_expr(table, &block, idx)?;
         }
 
         Use { name, root } => {
-            let module = populate_scope(root)?;
+            let module = populate_scope(&root)?;
             table.scopes[current].modules.insert(name.clone(), module);
         }
 
@@ -178,7 +177,7 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
 
 // If given node is declaration, add it to scope. Else, ignore.
 fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(), ScopeError> {
-    use NodeType::*;
+    use NodeKind::*;
     use ScopeError::*;
 
     match &root.node {
@@ -189,7 +188,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
             name,
         } => {
             // Check if function already declared in current scope
-            if table.scopes[current].functions.contains_key(name) {
+            if table.scopes[current].functions.contains_key(&name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 
@@ -204,9 +203,9 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
                     unreachable!()
                 };
                 // How to get non-sequential declarations?
-                let Some(arg_type) = node_to_type(var_type, current, table) else {
+                let Some(arg_type) = node_to_type(&var_type, current, table) else {
                     return Err(UndefinedType {
-                        name: node_type_to_str(var_type),
+                        name: node_type_to_str(&var_type),
                     });
                 };
                 // Add arg to scope.
@@ -220,11 +219,11 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
             let fn_type = self::Type {
                 ty: TypeType::Fn {
                     args: arg_types,
-                    ret: match node_to_type(ret_type, idx, table) {
+                    ret: match node_to_type(&ret_type, idx, table) {
                         Some(ty) => Box::new(ty),
                         None => {
                             return Err(UndefinedType {
-                                name: node_type_to_str(ret_type),
+                                name: node_type_to_str(&ret_type),
                             });
                         }
                     },
@@ -236,7 +235,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
                 .insert(name.clone(), fn_type);
 
             // Check scopes of body.
-            scope_expr(table, body, idx)?;
+            scope_expr(table, &body, idx)?;
         }
 
         VarDec {
@@ -245,27 +244,27 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
             var_type,
         } => {
             // Check if var already declared in current scope
-            if table.scopes[current].vars.contains_key(name) {
+            if table.scopes[current].vars.contains_key(&name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 
-            let ty = node_to_type(var_type, current, table);
+            let ty = node_to_type(&var_type, current, table);
             if let Some(expr) = expr {
-                scope_expr(table, expr, current)?;
+                scope_expr(table, &expr, current)?;
                 //inits.insert(name.clone());
             }
             if let Some(ty) = ty {
                 table.scopes[current].vars.insert(name.clone(), ty);
             } else {
                 return Err(UndefinedType {
-                    name: node_type_to_str(var_type),
+                    name: node_type_to_str(&var_type),
                 });
             }
         }
 
         StructDec { name, fields } => {
             // Check if struct already declared in current scope
-            if table.scopes[current].types.contains_key(name) {
+            if table.scopes[current].types.contains_key(&name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 
@@ -298,7 +297,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
 
         EnumDec { name, variants } => {
             // Check if enum already declared in current scope
-            if table.scopes[current].types.contains_key(name) {
+            if table.scopes[current].types.contains_key(&name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 
@@ -334,7 +333,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
 
 // Checks scope of an expression.
 fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(), ScopeError> {
-    use ExprType::*;
+    use ExprKind::*;
     use ScopeError::*;
 
     match &expr.expr {
@@ -428,7 +427,7 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
             scope_expr(table, second, current)?;
             // TODO: If op is assign, add left to initialized hashset.
             // Or is that part of flow_graph.rs?
-            // Also a check on whether first is an assignable expr.
+            // Also a check on whether first is an lvalue.
         }
         UnOp { expr, .. } => {
             scope_expr(table, expr, current)?;
