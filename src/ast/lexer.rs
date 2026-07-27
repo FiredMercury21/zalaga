@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use crate::utils::PeekExt;
 
 /*---Types---*/
@@ -72,14 +74,28 @@ pub enum TokType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
-    pub line: usize,
-    pub idx: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub tok_type: TokType,
     pub index: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct FilePos(usize);
+
+impl FilePos {
+    fn span(&mut self, interval: usize) -> Span {
+        let span = Span {
+            start: self.0,
+            end: self.0 + interval,
+        };
+        self.0 += interval;
+        span
+    }
 }
 
 /*---Helper functions---*/
@@ -105,11 +121,6 @@ fn split_once(arr: &[Token], pred: impl FnMut(&Token) -> bool) -> (&[Token], &[T
     }
 }
 
-// Check line number of split_once output, returning None if both empty.
-fn try_find_line((indents, tokens): &(&[Token], &[Token])) -> Option<usize> {
-    indents.first().or(tokens.first()).map(|tok| tok.index.line)
-}
-
 /*---Lexer---*/
 
 pub fn tokenize_code(code: &str) -> Vec<Token> {
@@ -118,96 +129,92 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
 
     let cleaned = conv_code_ws(code);
     let look = &mut cleaned.chars().peekable();
-    let mut output = Vec::new();
-    let mut stream = Vec::new();
-    let mut line_idx = 1;
-    let mut idx = 1;
-    let mut prev_idx;
+    let mut toks = Vec::new();
+    let mut interval = 0;
+    let cursor = FilePos::default();
 
     while let Some(c) = look.next() {
-        prev_idx = idx;
-        stream.push(Token {
+        toks.push(Token {
             tok_type: match c {
                 ' ' => continue,
 
                 // Stop chars.
                 // Surely there's a more elegant way?
                 '(' => {
-                    idx += 1;
+                    interval = 1;
                     LBrack
                 }
                 ')' => {
-                    idx += 1;
+                    interval = 1;
                     RBrack
                 }
                 '{' => {
-                    idx += 1;
+                    interval = 1;
                     LSquirl
                 }
                 '}' => {
-                    idx += 1;
+                    interval = 1;
                     RSquirl
                 }
                 '[' => {
-                    idx += 1;
+                    interval = 1;
                     LSquare
                 }
                 ']' => {
-                    idx += 1;
+                    interval = 1;
                     RSquare
                 }
 
                 ';' => {
-                    idx += 1;
+                    interval = 1;
                     SColon
                 }
                 ',' => {
-                    idx += 1;
+                    interval = 1;
                     Comma
                 }
                 '.' => {
-                    idx += 1;
+                    interval = 1;
                     Period
                 }
 
                 '_' => {
-                    idx += 1;
+                    interval = 1;
                     Underscore
                 }
 
                 '@' => {
-                    idx += 1;
+                    interval = 1;
                     At
                 }
 
                 '#' => {
-                    idx += 1;
+                    interval = 1;
                     Op(Deref)
                 }
 
                 '^' => {
-                    idx += 1;
+                    interval = 1;
                     Op(Exp)
                 }
 
                 '*' => {
-                    idx += 1;
+                    interval = 1;
                     Op(Mul)
                 }
 
                 '%' => {
-                    idx += 1;
+                    interval = 1;
                     Op(Mod)
                 }
 
                 '\t' => {
-                    idx += 4;
+                    interval = 4;
                     Indent
                 }
 
                 '\n' => {
-                    idx = 1;
-                    line_idx += 1;
+                    interval = 1; // One or zero?
                     Newline
                 }
 
@@ -216,16 +223,16 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '-' => match look.peek() {
                     Some('>') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Arrow
                     }
                     Some('-') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(Dec)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(Sub)
                     }
                 },
@@ -233,11 +240,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '&' => match look.peek() {
                     Some('&') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(And)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(Ref)
                     }
                 },
@@ -245,11 +252,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '|' => match look.peek() {
                     Some('|') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(Or)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Guard
                     }
                 },
@@ -257,11 +264,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 ':' => match look.peek() {
                     Some(':') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Separator
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Colon
                     }
                 },
@@ -269,11 +276,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '+' => match look.peek() {
                     Some('+') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(Inc)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(Add)
                     }
                 },
@@ -281,11 +288,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '>' => match look.peek() {
                     Some('=') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(GorET)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(GT)
                     }
                 },
@@ -293,11 +300,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '<' => match look.peek() {
                     Some('=') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(LorET)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(LT)
                     }
                 },
@@ -305,11 +312,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '!' => match look.peek() {
                     Some('=') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(NotET)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(Neg)
                     }
                 },
@@ -317,11 +324,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 '=' => match look.peek() {
                     Some('=') => {
                         look.next();
-                        idx += 2;
+                        interval = 2;
                         Op(ET)
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(Assign)
                     }
                 },
@@ -330,16 +337,16 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     Some(x) => match look.peek() {
                         Some('\'') => {
                             look.next();
-                            idx += 2;
+                            interval = 2;
                             Char(x)
                         }
                         _ => {
-                            idx += 1;
+                            interval = 1;
                             Illegal(c) // x is lost!! Bad. But only in bad syntax.
                         }
                     },
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Illegal(c)
                     }
                 },
@@ -352,7 +359,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                         continue;
                     }
                     _ => {
-                        idx += 1;
+                        interval = 1;
                         Op(Div)
                     }
                 },
@@ -365,10 +372,10 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                         look.next();
                         let post = look.peek_while::<_, String>(|c: &char| c.is_ascii_digit());
                         let num = dig + &post;
-                        idx += num.len();
+                        interval = num.len();
                         Float(num)
                     } else {
-                        idx += dig.len();
+                        interval = dig.len();
                         Num(dig)
                     }
                 }
@@ -378,7 +385,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     let post = look
                         .peek_while::<_, String>(|c: &char| c.is_ascii_alphanumeric() || *c == '_');
                     let ident = c.to_string() + &post;
-                    idx += ident.len();
+                    interval = ident.len();
                     Ident(ident)
                 }
 
@@ -386,82 +393,60 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 _ => Illegal(c),
             },
 
-            index: Span {
-                line: line_idx,
-                idx: prev_idx,
-            },
+            index: cursor.span(interval),
         });
     }
 
     // The stupid indents. They preface each line. Need to cut them down
     // to just single Indents and Dedents when needed.
 
-    // Nasty method chaining, but the imperative way was way worse.
-    let mut indent_n: Vec<(i32, bool)> = stream
-        .split(|tok| tok.tok_type == TokType::Newline)
-        .map(|line| {
-            line.iter().fold((0, false), |acc, tok| {
-                if let TokType::Indent = tok.tok_type {
-                    (acc.0 + 1, acc.1)
+    // Nasty method chaining, but the imperative version was way worse.
+    let mut output = stream
+        // Split by Newline
+        .split(|tok| tok.tok_type == Newline)
+        // Split lines into (indents, post)
+        .map(|line| split_once(line, |tok| tok.tok_type != Indent))
+        // Remove all blank lines
+        .filter(|(_, post)| post.is_empty())
+        // Add an empty line at end to make last indents work.
+        .chain(std::iter::once((&[] as &[Token], &[] as &[Token])))
+        // Turn into vec for windows() to pair stuff
+        .collect::<Vec<(&[Token], &[Token])>>()
+        // Pair up lines for indent delta calc
+        .windows(2)
+        // Check indent deltas and generate proper line.
+        .flat_map(|w: &[(&[Token], &[Token])]| {
+            // w[1] = next line, w[0] = this line, both are (indents, post).
+            let indent_delta = (w[1].0.len() as isize) - (w[0].0.len() as isize);
+            let mut indents = Vec::new();
+            for i in 0..indent_delta.unsigned_abs() {
+                // To make spans work, we copy from actual line.
+                indents.push(if indent_delta > 0 {
+                    Token {
+                        tok_type: Indent,
+                        index: w[1].0[i].index.clone(),
+                    }
                 } else {
-                    (acc.0, true)
-                }
-            })
+                    Token {
+                        tok_type: Dedent,
+                        index: w[1].1[0].index.clone(),
+                    }
+                });
+            }
+            // Add Newline back.
+            indents.push(Token {
+                tok_type: Newline,
+                index: w[1].1[0].index,
+            });
+            // Return the 'post' of this line with indents appended.
+            w[0].1.iter().chain(indents.iter()).collect()
         })
         .collect();
 
-    if !indent_n.last().unwrap().1 {
-        indent_n.last_mut().unwrap().0 = 0;
-    }
-    for i in (0..indent_n.len().saturating_sub(2)).rev() {
-        if !indent_n[i].1 {
-            indent_n[i].0 = indent_n[i + 1].0;
-        }
-    }
-
-    // Really weird. Tuple nightmare.
-    // stream[i].0 is the indent block, stream[i].1 is the rest of the line.
-    let stream: Vec<(&[Token], &[Token])> = stream
-        .split_inclusive(|tok| tok.tok_type == TokType::Newline)
-        .map(|line| split_once(line, |tok| tok.tok_type != TokType::Indent))
-        .collect();
-
-    output.extend_from_slice(stream[0].1);
-    for i in 1..(stream.len() - 1) {
-        let indent_delta = indent_n[i].0 - indent_n[i - 1].0;
-        output.extend_from_slice(
-            &(if indent_delta > 0 {
-                // We copy from the indent block, stream[i].0.
-                stream[i].0[..indent_delta as usize].to_vec()
-            } else if indent_delta < 0 {
-                // We add dedents to the output.
-                vec![
-                    Token {
-                        tok_type: Dedent,
-                        index: Span {
-                            line: try_find_line(&stream[i]).unwrap_or(
-                                try_find_line(&stream[i - 1])
-                                    .unwrap_or(output.last().unwrap().index.line)
-                            ),
-                            idx: 0
-                        } // Ewww.
-                    };
-                    indent_delta.abs() as usize
-                ]
-            } else {
-                vec![]
-            }),
-        );
-        // Copy the rest of the line.
-        output.extend_from_slice(stream[i].1);
-    }
-
+    // Add EOF.
     output.push(Token {
         tok_type: Eof,
-        index: Span {
-            line: output.last().unwrap().index.line + 1,
-            idx: 0,
-        },
+        index: output.last().expect("Empty File").index.clone(),
     });
 
     output
