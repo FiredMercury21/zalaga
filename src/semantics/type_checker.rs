@@ -61,7 +61,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             Ok(const_to_type(&val))
         }
         BinOp { first, second, op } => {
-            use crate::ast::lexer::Operator::*;
+            use Operator::*;
 
             let first_type = synth(first, scope, table)?;
             let second_type = synth(second, scope, table)?;
@@ -92,8 +92,10 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
         }
 
         UnOp { op, expr } => {
+            use Operator::*;
+
             let expr_type = synth(expr, scope, table)?;
-            use crate::ast::lexer::Operator::*;
+
             match op {
                 Inc | Dec => Ok(expr_type),
                 Neg => Ok(Type {
@@ -109,7 +111,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                         Prim(self::Prim::Ref(ty)) => *ty,
                         _ => {
                             return Err(TypeCheckError {
-                                ty: TypeCheckErrorType::DerefOnNonRef { ty: expr_type },
+                                ty: TypeCheckErrorKind::DerefOnNonRef { ty: expr_type },
                                 location: expr.span.clone(),
                             });
                         }
@@ -151,7 +153,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             } = ty.clone()
             else {
                 return Err(TypeCheckError {
-                    ty: TypeCheckErrorType::FieldOnNonStruct {
+                    ty: TypeCheckErrorKind::FieldOnNonStruct {
                         ty,
                         field: field.clone(),
                     },
@@ -161,7 +163,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             match fields.iter().find(|(field_name, _, _)| field_name == field) {
                 Some((_, ty, _)) => Ok(ty.clone()),
                 None => Err(TypeCheckError {
-                    ty: TypeCheckErrorType::FieldNotInStruct {
+                    ty: TypeCheckErrorKind::FieldNotInStruct {
                         field: field.clone(),
                         ty,
                     },
@@ -219,7 +221,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                     .clone();
                 if !check(&expected, &ty) {
                     return Err(TypeCheckError {
-                        ty: TypeCheckErrorType::TypeMismatch {
+                        ty: TypeCheckErrorKind::TypeMismatch {
                             expected,
                             actual: ty,
                         },
@@ -243,7 +245,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             } = ty.clone()
             else {
                 return Err(TypeCheckError {
-                    ty: TypeCheckErrorType::VariantOnNonEnum { ty },
+                    ty: TypeCheckErrorKind::VariantOnNonEnum { ty },
                     location: expr.span.clone(),
                 });
             };
@@ -255,7 +257,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                 else {
                     return Err(TypeCheckError {
                         // We do variant checks in scope pass, so we know variant exists, just blank.
-                        ty: TypeCheckErrorType::ValOnBlankVariant {
+                        ty: TypeCheckErrorKind::ValOnBlankVariant {
                             ty,
                             variant: variant.clone(),
                             val: *val.clone(),
@@ -265,7 +267,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                 };
                 if !check(&expr_ty, variant_ty) {
                     return Err(TypeCheckError {
-                        ty: TypeCheckErrorType::TypeMismatch {
+                        ty: TypeCheckErrorKind::TypeMismatch {
                             expected: variant_ty.clone(),
                             actual: expr_ty,
                         },
@@ -288,7 +290,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                 let else_ty = synth(else_block, scope, table)?;
                 if !check(&then_ty, &else_ty) {
                     return Err(TypeCheckError {
-                        ty: TypeCheckErrorType::TypeMismatch {
+                        ty: TypeCheckErrorKind::TypeMismatch {
                             expected: then_ty,
                             actual: else_ty,
                         },
@@ -329,7 +331,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                     .any(|(patt, _)| matches!(patt, Pattern::Val { .. }))
                 {
                     return Err(TypeCheckError {
-                        ty: TypeCheckErrorType::ValWhenDestructEnum,
+                        ty: TypeCheckErrorKind::ValWhenDestructEnum,
                         location: expr.span.clone(),
                     });
                 }
@@ -348,7 +350,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                 for v1 in grd_variants.clone() {
                     if !variants.iter().any(|v2| v2.0 == v1) {
                         return Err(TypeCheckError {
-                            ty: TypeCheckErrorType::VariantNotInEnum {
+                            ty: TypeCheckErrorKind::VariantNotInEnum {
                                 ty: expr_ty.clone(),
                                 variant: v1.clone(),
                             },
@@ -365,7 +367,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                     for variant in variants.iter().map(|v| v.0.clone()) {
                         if !grd_variants.iter().any(|v1| v1 == &variant) {
                             return Err(TypeCheckError {
-                                ty: TypeCheckErrorType::EnumVariantMissing { expected: variant },
+                                ty: TypeCheckErrorKind::EnumVariantMissing { expected: variant },
                                 location: expr.span.clone(),
                             });
                         }
@@ -378,7 +380,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                         Pattern::All | Pattern::Var { .. } => break,
                         Pattern::Variant { .. } => {
                             return Err(TypeCheckError {
-                                ty: TypeCheckErrorType::UnexpectedVariantPattern {
+                                ty: TypeCheckErrorKind::UnexpectedVariantPattern {
                                     patt: patt.clone(),
                                 },
                                 location: expr.span.clone(),
@@ -387,13 +389,13 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                         Pattern::Val { val } => {
                             let placeholder_expr = Expr {
                                 expr: ExprKind::Const { val: val.clone() },
-                                span: crate::ast::lexer::Span { start: 0, end: 0 },
+                                span: Span { start: 0, end: 0 },
                                 id: Id(0),
                             };
                             let val_ty = synth(&placeholder_expr, scope, table)?;
                             if !check(&expr_ty, &val_ty) {
                                 return Err(TypeCheckError {
-                                    ty: TypeCheckErrorType::TypeMismatch {
+                                    ty: TypeCheckErrorKind::TypeMismatch {
                                         expected: expr_ty,
                                         actual: val_ty,
                                     },
@@ -418,7 +420,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                 let then_ty = synth(&then, scope, table)?;
                 if !check(&ret_ty, &then_ty) {
                     return Err(TypeCheckError {
-                        ty: TypeCheckErrorType::TypeMismatch {
+                        ty: TypeCheckErrorKind::TypeMismatch {
                             expected: ret_ty,
                             actual: then_ty,
                         },

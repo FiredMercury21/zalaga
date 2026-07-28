@@ -1,14 +1,172 @@
-use super::ast_types::ExprKind::*;
-use super::ast_types::NodeKind::*;
-use super::ast_types::ParseErrorKind::*;
 use super::ast_types::*;
-
-use super::lexer::TokType::*;
-use super::lexer::*;
+use super::ast_types::{ExprKind::*, NodeKind::*, TokType::*};
+use ParseErrorKind::*;
 
 /*---Types---*/
 
-// All types are present within the `ast_types.rs`.
+// What we pass to every function.
+// I wanted to use an iterator but there's a
+// couple times we need to go back.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cursor {
+    pub stream: Vec<Token>,
+    pub pos: usize,
+    pub node_id: Id,
+}
+
+impl Iterator for Cursor {
+    type Item = TokType;
+    fn next(&mut self) -> Option<TokType> {
+        let ret = self
+            .stream
+            .get(self.pos)
+            .map(|Token { tok_type, .. }| tok_type.clone());
+        self.pos += 1;
+        ret
+    }
+}
+
+impl Cursor {
+    pub fn peek(&self) -> Option<TokType> {
+        self.stream
+            .get(self.pos)
+            .map(|Token { tok_type, .. }| tok_type.clone())
+    }
+
+    pub fn last_idx(&self) -> Span {
+        // Ideally there should be checks on empty streams.
+        // Usually we use this function after we read a bad token.
+        match self.stream.get(self.pos - 1) {
+            Some(tok) => tok.index.clone(),
+            None => self.stream[self.pos.saturating_sub(2)].index.clone(),
+        }
+    }
+
+    pub fn new_id(&mut self) -> Id {
+        self.node_id.0 += 1;
+        self.node_id
+    }
+
+    /// Expect a given token, else err generic.
+    pub fn expect(&mut self, expected: TokType) -> Result<(), ParseError> {
+        match self.next() {
+            Some(token) if token == expected => Ok(()),
+            _ => Err(ParseError {
+                err: ParseErrorKind::InvalidSyntax,
+                span: self.last_idx(),
+            }),
+        }
+    }
+
+    /// Expect a given token, else err with given error.
+    pub fn expect_else(
+        &mut self,
+        expected: TokType,
+        error: ParseErrorKind,
+    ) -> Result<(), ParseError> {
+        match self.next() {
+            Some(token) if token == expected => Ok(()),
+            _ => Err(ParseError {
+                err: error,
+                span: self.last_idx(),
+            }),
+        }
+    }
+
+    /// Expect an Ident token, return it as a String, else err generic.
+    pub fn expect_ident(&mut self) -> Result<String, ParseError> {
+        match self.next() {
+            Some(Ident(ident)) => Ok(ident),
+            _ => Err(ParseError {
+                err: ParseErrorKind::InvalidSyntax,
+                span: self.last_idx(),
+            }),
+        }
+    }
+
+    /// Expect an Ident token, return it as a String, else err with given error.
+    pub fn expect_ident_else(&mut self, error: ParseErrorKind) -> Result<String, ParseError> {
+        match self.next() {
+            Some(Ident(ident)) => Ok(ident),
+            _ => Err(ParseError {
+                err: error,
+                span: self.last_idx(),
+            }),
+        }
+    }
+
+    pub fn new_node(&mut self, from: NodeKind) -> Node {
+        Node {
+            node: from,
+            span: self.last_idx(),
+            id: self.new_id(),
+        }
+    }
+
+    pub fn new_expr(&mut self, from: ExprKind) -> Expr {
+        Expr {
+            expr: from,
+            span: self.last_idx(),
+            id: self.new_id(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParseError {
+    pub err: ParseErrorKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParseErrorKind {
+    BadDeref,
+    BadRef,
+    BadAtom,
+    BadExpr,
+    BadPath,
+    BadPattern,
+    FnNoRetType,
+    FnNoParen,
+    FnNoName,
+    FnNoBody,
+    FnBadArg,
+    FnSyntax,
+    FnNoCloseBrack,
+    VarNoType,
+    VarNoName,
+    ForNoInit,
+    ForNoPred,
+    ForNoBlock,
+    WhileNoBlock,
+    AsnBadSyntax,
+    EnumNoBlock,
+    EnumBadSyntax,
+    EnumDuplicateVariant,
+    StructNoBlock,
+    StructBadSyntax,
+    StructNoFieldInit,
+    StructDuplicateField,
+    BadType,
+    UnionNoBlock,
+    UnionBadSyntax,
+    IfNoBlock,
+    BlockParseErr,
+    ExprParseErr,
+    UnclosedBrack,
+    InvalidKeyword,
+    InvalidField,
+    ModuleAccessWithoutField,
+    ModuleNotFound,
+    ImportNoName,
+    ImportNoAlias,
+    InvalidSyntax,
+    UnexpectedEof,
+    ScopeError,
+    EmptyFile,
+    Generic,
+}
 
 /*---Helper functions---*/
 
@@ -68,7 +226,6 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
 
 // Find appropriate parse function.
 fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
-    println!("{:#?}", code.peek());
     Ok(match code.peek() {
         Some(Ident(ident)) => match ident.as_str() {
             "fn" => parse_fn_dec(code)?,
@@ -202,6 +359,7 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         });
     };
     let ret_type = Box::new(ret_type);
+    println!("{:#?}", code.peek());
     code.expect_else(Colon, FnNoRetType)?;
     code.expect_else(Newline, FnSyntax)?;
     code.expect_else(Indent, FnSyntax)?;
@@ -541,7 +699,6 @@ fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
     let mod_ast = match ast_path_to_file(module_name.vec()) {
         Ok(file_str) => build_ast(&file_str, &module_name.base())?,
         Err(e) => {
-            println!("{:?}", e);
             return Err(ParseError {
                 err: ParseErrorKind::ModuleNotFound,
                 span: code.last_idx(),
@@ -827,6 +984,7 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::lexer::tokenize_code;
 
     #[test]
     fn test_var_asn() {

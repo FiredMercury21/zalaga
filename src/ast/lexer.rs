@@ -1,88 +1,9 @@
+use super::ast_types::*;
 use std::ops::Add;
 
 use crate::utils::PeekExt;
 
 /*---Types---*/
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Operator {
-    // Binary Operators
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Exp,
-    Mod,
-    Assign,
-
-    // Logical Operators
-    LT,
-    GT,
-    ET,
-    LorET,
-    GorET,
-    NotET,
-    Or,
-    And,
-
-    // Unary Operators
-    Neg,
-    Inc,
-    Dec,
-    Ref,
-    Deref,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokType {
-    // Parens
-    LBrack,
-    RBrack,
-    LSquirl,
-    RSquirl,
-    LSquare,
-    RSquare,
-
-    // Structure
-    Indent,
-    Dedent,
-    Newline,
-    Eof,
-    Colon,
-    SColon,
-    Guard,
-    Comma,
-    Arrow,
-    Period,
-    At,
-    Underscore,
-    Separator,
-
-    // Operators
-    Op(Operator),
-
-    // Constants
-    Num(String),
-    Float(String),
-    Char(char),
-
-    // Identifiers
-    Ident(String),
-
-    Illegal(char),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Token {
-    pub tok_type: TokType,
-    pub index: Span,
-}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 struct FilePos(usize);

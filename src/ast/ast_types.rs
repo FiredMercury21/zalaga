@@ -1,8 +1,85 @@
-use super::lexer::TokType::*;
-use super::lexer::*;
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Id(pub usize);
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Operator {
+    // Binary Operators
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Exp,
+    Mod,
+    Assign,
+
+    // Logical Operators
+    LT,
+    GT,
+    ET,
+    LorET,
+    GorET,
+    NotET,
+    Or,
+    And,
+
+    // Unary Operators
+    Neg,
+    Inc,
+    Dec,
+    Ref,
+    Deref,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokType {
+    // Parens
+    LBrack,
+    RBrack,
+    LSquirl,
+    RSquirl,
+    LSquare,
+    RSquare,
+
+    // Structure
+    Indent,
+    Dedent,
+    Newline,
+    Eof,
+    Colon,
+    SColon,
+    Guard,
+    Comma,
+    Arrow,
+    Period,
+    At,
+    Underscore,
+    Separator,
+
+    // Operators
+    Op(Operator),
+
+    // Constants
+    Num(String),
+    Float(String),
+    Char(char),
+
+    // Identifiers
+    Ident(String),
+
+    Illegal(char),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    pub tok_type: TokType,
+    pub index: Span,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Constant {
@@ -25,12 +102,6 @@ pub struct Node {
     pub node: NodeKind,
     pub span: Span,
     pub id: Id,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParseError {
-    pub err: ParseErrorKind,
-    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -208,163 +279,6 @@ impl Path {
 
     pub fn vec(&self) -> Vec<String> {
         self.0.clone()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParseErrorKind {
-    BadDeref,
-    BadRef,
-    BadAtom,
-    BadExpr,
-    BadPath,
-    BadPattern,
-    FnNoRetType,
-    FnNoParen,
-    FnNoName,
-    FnNoBody,
-    FnBadArg,
-    FnSyntax,
-    FnNoCloseBrack,
-    VarNoType,
-    VarNoName,
-    ForNoInit,
-    ForNoPred,
-    ForNoBlock,
-    WhileNoBlock,
-    AsnBadSyntax,
-    EnumNoBlock,
-    EnumBadSyntax,
-    EnumDuplicateVariant,
-    StructNoBlock,
-    StructBadSyntax,
-    StructNoFieldInit,
-    StructDuplicateField,
-    BadType,
-    UnionNoBlock,
-    UnionBadSyntax,
-    IfNoBlock,
-    BlockParseErr,
-    ExprParseErr,
-    UnclosedBrack,
-    InvalidKeyword,
-    InvalidField,
-    ModuleAccessWithoutField,
-    ModuleNotFound,
-    ImportNoName,
-    ImportNoAlias,
-    InvalidSyntax,
-    UnexpectedEof,
-    ScopeError,
-    EmptyFile,
-    Generic,
-}
-
-// What we pass to every function.
-// I wanted to use an iterator but there's a
-// couple times we need to go back.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Cursor {
-    pub stream: Vec<Token>,
-    pub pos: usize,
-    pub node_id: Id,
-}
-
-impl Iterator for Cursor {
-    type Item = TokType;
-    fn next(&mut self) -> Option<TokType> {
-        let ret = self
-            .stream
-            .get(self.pos)
-            .map(|Token { tok_type, .. }| tok_type.clone());
-        self.pos += 1;
-        ret
-    }
-}
-
-impl Cursor {
-    pub fn peek(&self) -> Option<TokType> {
-        self.stream
-            .get(self.pos)
-            .map(|Token { tok_type, .. }| tok_type.clone())
-    }
-
-    pub fn last_idx(&self) -> Span {
-        // Ideally there should be checks on empty streams.
-        // Usually we use this function after we read a bad token.
-        match self.stream.get(self.pos - 1) {
-            Some(tok) => tok.index.clone(),
-            None => self.stream[self.pos.saturating_sub(2)].index.clone(),
-        }
-    }
-
-    pub fn new_id(&mut self) -> Id {
-        self.node_id.0 += 1;
-        self.node_id
-    }
-
-    /// Expect a given token, else err generic.
-    pub fn expect(&mut self, expected: TokType) -> Result<(), ParseError> {
-        match self.next() {
-            Some(token) if token == expected => Ok(()),
-            _ => Err(ParseError {
-                err: ParseErrorKind::InvalidSyntax,
-                span: self.last_idx(),
-            }),
-        }
-    }
-
-    /// Expect a given token, else err with given error.
-    pub fn expect_else(
-        &mut self,
-        expected: TokType,
-        error: ParseErrorKind,
-    ) -> Result<(), ParseError> {
-        match self.next() {
-            Some(token) if token == expected => Ok(()),
-            _ => Err(ParseError {
-                err: error,
-                span: self.last_idx(),
-            }),
-        }
-    }
-
-    /// Expect an Ident token, return it as a String, else err generic.
-    pub fn expect_ident(&mut self) -> Result<String, ParseError> {
-        match self.next() {
-            Some(Ident(ident)) => Ok(ident),
-            _ => Err(ParseError {
-                err: ParseErrorKind::InvalidSyntax,
-                span: self.last_idx(),
-            }),
-        }
-    }
-
-    /// Expect an Ident token, return it as a String, else err with given error.
-    pub fn expect_ident_else(&mut self, error: ParseErrorKind) -> Result<String, ParseError> {
-        match self.next() {
-            Some(Ident(ident)) => Ok(ident),
-            _ => Err(ParseError {
-                err: error,
-                span: self.last_idx(),
-            }),
-        }
-    }
-
-    pub fn new_node(&mut self, from: NodeKind) -> Node {
-        Node {
-            node: from,
-            span: self.last_idx(),
-            id: self.new_id(),
-        }
-    }
-
-    pub fn new_expr(&mut self, from: ExprKind) -> Expr {
-        Expr {
-            expr: from,
-            span: self.last_idx(),
-            id: self.new_id(),
-        }
     }
 }
 

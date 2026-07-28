@@ -112,7 +112,7 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
 
     match &node.node {
         // Handled by other guards using register_dec() on blocks.
-        FnDec { .. } | StructDec { .. } | EnumDec { .. } | VarDec { .. } => {}
+        FnDec { .. } | StructDec { .. } | EnumDec { .. } | VarDec { .. } | Use { .. } => {}
 
         Statement { expr } => {
             scope_expr(table, &expr, current)?;
@@ -162,11 +162,6 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
             let idx = table.new_scope(Some(current), block.id);
             scope_expr(table, &pred, idx)?;
             scope_expr(table, &block, idx)?;
-        }
-
-        Use { name, root } => {
-            let module = populate_scope(&root)?;
-            table.scopes[current].modules.insert(name.clone(), module);
         }
 
         Type { .. } => unreachable!(),
@@ -324,6 +319,24 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
             table.scopes[current]
                 .types
                 .insert(name.clone(), ty.to_type());
+        }
+
+        Use { name, root } => {
+            if table.scopes[current].modules.contains_key(name) {
+                return Err(AlreadyDeclared { name: name.clone() });
+            }
+            let module_scope = match populate_scope(root) {
+                Ok(module_scope) => module_scope,
+                Err(e) => {
+                    return Err(ErrInModule {
+                        err: Box::new(e),
+                        mod_name: name.clone(),
+                    });
+                }
+            };
+            table.scopes[current]
+                .modules
+                .insert(name.clone(), module_scope);
         }
 
         _ => {}

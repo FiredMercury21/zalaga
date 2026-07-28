@@ -1,5 +1,4 @@
 use crate::ast::ast_types::*;
-use crate::ast::lexer::Span;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,12 +156,12 @@ impl TypeType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeCheckError {
-    pub ty: TypeCheckErrorType,
+    pub ty: TypeCheckErrorKind,
     pub location: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeCheckErrorType {
+pub enum TypeCheckErrorKind {
     ExpectedType {
         expected: Type,
         actual: Type,
@@ -208,6 +207,10 @@ pub enum TypeCheckErrorType {
     DerefOnNonRef {
         ty: Type,
     },
+    ErrorInModule {
+        err: Box<TypeCheckError>,
+        mod_name: String,
+    },
 }
 
 // #[derive(Debug, Clone, PartialEq)]
@@ -218,12 +221,29 @@ pub enum TypeCheckErrorType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScopeError {
-    UndefinedType { name: String },
-    UndefinedVar { name: String },
-    UndefinedFn { name: String },
-    UndefinedField { field: String },
-    UndefinedEnumVariant { parent: String, name: String },
-    AlreadyDeclared { name: String },
+    UndefinedType {
+        name: String,
+    },
+    UndefinedVar {
+        name: String,
+    },
+    UndefinedFn {
+        name: String,
+    },
+    UndefinedField {
+        field: String,
+    },
+    UndefinedEnumVariant {
+        parent: String,
+        name: String,
+    },
+    AlreadyDeclared {
+        name: String,
+    },
+    ErrInModule {
+        err: Box<ScopeError>,
+        mod_name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

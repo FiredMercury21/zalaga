@@ -27,11 +27,11 @@ pub mod targets {
     use crate::ast::ast_types::*;
     use crate::ast::*;
 
-    pub fn tokenize(file_str: &str) -> Vec<lexer::Token> {
+    pub fn tokenize(file_str: &str) -> Vec<Token> {
         lexer::tokenize_code(file_str)
     }
 
-    pub fn build_ast(file_str: &str, name: &str) -> Result<Node, ParseError> {
+    pub fn build_ast(file_str: &str, name: &str) -> Result<Node, tree::ParseError> {
         let tokens = lexer::tokenize_code(file_str);
         tree::parse_file(tokens, name)
     }
