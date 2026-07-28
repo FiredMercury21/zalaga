@@ -22,7 +22,7 @@ pub enum Pattern {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
-    pub node: NodeType,
+    pub node: NodeKind,
     pub span: Span,
     pub id: Id,
 }
@@ -308,7 +308,7 @@ impl Cursor {
         match self.next() {
             Some(token) if token == expected => Ok(()),
             _ => Err(ParseError {
-                err: ParseErrorType::InvalidSyntax,
+                err: ParseErrorKind::InvalidSyntax,
                 span: self.last_idx(),
             }),
         }
@@ -318,7 +318,7 @@ impl Cursor {
     pub fn expect_else(
         &mut self,
         expected: TokType,
-        error: ParseErrorType,
+        error: ParseErrorKind,
     ) -> Result<(), ParseError> {
         match self.next() {
             Some(token) if token == expected => Ok(()),
@@ -334,14 +334,14 @@ impl Cursor {
         match self.next() {
             Some(Ident(ident)) => Ok(ident),
             _ => Err(ParseError {
-                err: ParseErrorType::InvalidSyntax,
+                err: ParseErrorKind::InvalidSyntax,
                 span: self.last_idx(),
             }),
         }
     }
 
     /// Expect an Ident token, return it as a String, else err with given error.
-    pub fn expect_ident_else(&mut self, error: ParseErrorType) -> Result<String, ParseError> {
+    pub fn expect_ident_else(&mut self, error: ParseErrorKind) -> Result<String, ParseError> {
         match self.next() {
             Some(Ident(ident)) => Ok(ident),
             _ => Err(ParseError {
@@ -351,7 +351,7 @@ impl Cursor {
         }
     }
 
-    pub fn new_node(&mut self, from: NodeType) -> Node {
+    pub fn new_node(&mut self, from: NodeKind) -> Node {
         Node {
             node: from,
             span: self.last_idx(),
@@ -359,7 +359,7 @@ impl Cursor {
         }
     }
 
-    pub fn new_expr(&mut self, from: ExprType) -> Expr {
+    pub fn new_expr(&mut self, from: ExprKind) -> Expr {
         Expr {
             expr: from,
             span: self.last_idx(),

@@ -48,13 +48,13 @@ fn const_to_type(val: &Constant) -> Type {
 // Infer the type of an expression.
 fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, TypeCheckError> {
     use self::Prim::*;
-    use ExprType::*;
+    use ExprKind::*;
     use TypeType::*;
 
     match &expr.expr {
         Var { path } => {
             let ty = table.get_var(path, scope).unwrap(); // SHOULD be fine if scoping is done before.
-            Ok(ty)
+            Ok(ty.clone())
         }
         Const { val } => {
             // TODO: Strings. Also other sizes?
@@ -130,7 +130,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                 Some(Type {
                     ty: TypeType::Fn { ret, .. },
                     ..
-                }) => Ok(*ret),
+                }) => Ok(*ret.clone()),
                 _ => unreachable!(),
             }
         }
@@ -170,9 +170,9 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             }
         }
 
-        ExprType::Struct { path, fields } => {
+        ExprKind::Struct { path, fields } => {
             // Get the type def, to match fields later.
-            let Some(struct_def) = table.get_type(path, scope) else {
+            let Some(struct_def) = table.get_type(path, scope).cloned() else {
                 unreachable!() // Should've checked scope by now. Hopefully!!! Do I call synth in scope check?
             };
             let Type {
@@ -192,7 +192,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                 // Destructure field declaration to get name of field.
                 let Expr {
                     expr:
-                        ExprType::BinOp {
+                        ExprKind::BinOp {
                             first: field_var_expr,
                             second: field_expr,
                             ..
@@ -210,7 +210,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                     unreachable!()
                 };
 
-                let ty = synth(field_expr, scope, table)?;
+                let ty = synth(&field_expr, scope, table)?;
                 let expected = struct_fields
                     .iter()
                     .find(|(name, _, _)| name == &field_name.base())
@@ -231,12 +231,12 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             Ok(struct_def)
         }
 
-        ExprType::Enum { path, variant, val } => {
+        ExprKind::Enum { path, variant, val } => {
             // Return the enum type itself, not any specific variant.
             // But we do checks to make sure the variant is valid.
 
             // Unwrap because scope check done before in pipeline!
-            let ty = table.get_type(path, scope).unwrap();
+            let ty = table.get_type(path, scope).unwrap().to_owned();
             let Type {
                 ty: self::TypeType::Enum(self::Enum { variants, .. }),
                 ..
@@ -312,7 +312,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             let grd_vec: Vec<(Pattern, Expr)> = grds
                 .iter()
                 .map(|n| {
-                    let NodeType::Guard { patt, expr: then } = &n.node else {
+                    let NodeKind::Guard { patt, expr: then } = &n.node else {
                         unreachable!()
                     };
                     (patt.clone(), then.clone())
@@ -386,8 +386,8 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
                         }
                         Pattern::Val { val } => {
                             let placeholder_expr = Expr {
-                                expr: ExprType::Const { val: val.clone() },
-                                span: crate::ast::lexer::Span { line: 0, idx: 0 },
+                                expr: ExprKind::Const { val: val.clone() },
+                                span: crate::ast::lexer::Span { start: 0, end: 0 },
                                 id: Id(0),
                             };
                             let val_ty = synth(&placeholder_expr, scope, table)?;
@@ -406,7 +406,7 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             }
 
             // Check all guards to see if types of 'then' blocks are same.
-            let NodeType::Guard {
+            let NodeKind::Guard {
                 expr: first_grd_expr,
                 ..
             } = grds[0].node.clone()
@@ -438,12 +438,12 @@ fn synth(expr: &Expr, scope: usize, table: &mut ScopeTable) -> Result<Type, Type
             }
 
             // If last line of block isn't a statement, return is void.
-            let NodeType::Statement { expr: last_expr } = &lines.last().unwrap().node else {
+            let NodeKind::Statement { expr: last_expr } = &lines.last().unwrap().node else {
                 return Ok(Type::void());
             };
 
             // return type of last expression.
-            Ok(synth(last_expr, table.node_scope[&expr.id], table)?)
+            Ok(synth(&last_expr, table.node_scope[&expr.id], table)?)
         }
 
         // But how to check return type of their value?

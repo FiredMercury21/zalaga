@@ -68,6 +68,7 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
 
 // Find appropriate parse function.
 fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
+    println!("{:#?}", code.peek());
     Ok(match code.peek() {
         Some(Ident(ident)) => match ident.as_str() {
             "fn" => parse_fn_dec(code)?,
@@ -161,7 +162,7 @@ fn parse_block(code: &mut Cursor) -> Result<Expr, ParseError> {
         }
     }
 
-    Ok(code.new_expr(ExprType::Block { lines: statements }))
+    Ok(code.new_expr(ExprKind::Block { lines: statements }))
 }
 
 fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
@@ -179,14 +180,17 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         let arg = code.expect_ident()?;
         code.expect_else(Colon, VarNoType)?;
         let var_type = Box::new(parse_type(code)?);
-        if Some(Comma) == code.peek() {
-            code.next();
-        }
+
         args.push(code.new_node(VarDec {
             name: arg,
             expr: None,
             var_type,
         }));
+        if Some(Comma) == code.peek() {
+            code.next();
+        } else {
+            break;
+        }
     }
 
     code.expect_else(RBrack, FnNoParen)?;
@@ -468,10 +472,10 @@ fn parse_match(code: &mut Cursor) -> Result<Expr, ParseError> {
 
         // We make the expr a block because it has its own scope.
         let then_expr = parse_expr(code, 0)?;
-        let block_scope = vec![code.new_node(NodeType::Statement { expr: then_expr })];
+        let block_scope = vec![code.new_node(NodeKind::Statement { expr: then_expr })];
         let expr = code.new_expr(Block { lines: block_scope });
 
-        grds.push(code.new_node(NodeType::Guard { patt, expr }));
+        grds.push(code.new_node(NodeKind::Guard { patt, expr }));
         // Comma? Does expr consume last token?
         code.expect(Newline)?;
     }
@@ -516,7 +520,7 @@ fn parse_pattern(code: &mut Cursor) -> Result<Pattern, ParseError> {
 
         _ => {
             return Err(ParseError {
-                err: ParseErrorType::BadPattern,
+                err: ParseErrorKind::BadPattern,
                 span: code.last_idx(),
             });
         }
@@ -529,19 +533,17 @@ fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
     // use std::vec@alias
     // use longfilename@alias
 
-    use crate::cli::utils::load_file;
+    use crate::cli::utils::ast_path_to_file;
+    use crate::cli::utils::targets::*;
 
     code.expect_ident()?;
     let module_name = parse_path(code)?;
-    let mod_ast = match load_file(module_name.vec()) {
-        Ok(file_str) => {
-            let tokens = tokenize_code(&file_str);
-            let fname = module_name.base(); // base() and not fname().
-            parse_file(tokens, &fname)?
-        }
-        Err(_) => {
+    let mod_ast = match ast_path_to_file(module_name.vec()) {
+        Ok(file_str) => build_ast(&file_str, &module_name.base())?,
+        Err(e) => {
+            println!("{:?}", e);
             return Err(ParseError {
-                err: ParseErrorType::ModuleNotFound,
+                err: ParseErrorKind::ModuleNotFound,
                 span: code.last_idx(),
             });
         }
@@ -549,7 +551,7 @@ fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
     let root = Box::new(mod_ast);
     let name = if matches!(code.peek(), Some(At)) {
         code.next();
-        code.expect_ident_else(ParseErrorType::ImportNoAlias)?
+        code.expect_ident_else(ParseErrorKind::ImportNoAlias)?
     } else {
         module_name.base()
     };
@@ -791,9 +793,15 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
                             break Base(parse_path(code)?);
                         }
                         // Track number of references.
-                        Some(Op(Operator::Ref)) => ref_n += 1,
+                        Some(Op(Operator::Ref)) => {
+                            code.next();
+                            ref_n += 1
+                        }
                         // Ewww. To handle '&&' turning into 'And' in lexer.
-                        Some(Op(Operator::And)) => ref_n += 2,
+                        Some(Op(Operator::And)) => {
+                            code.next();
+                            ref_n += 2
+                        }
                         _ => {
                             return Err(ParseError {
                                 err: BadType,

@@ -2,6 +2,8 @@ use crate::cli::utils::*;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+use crate::cli::utils::load_file;
+
 /// zgc: Compiler and toolchain for Zalaga.
 #[derive(Parser)]
 #[command(name = "zgc", author, version, about, long_about = None)]
@@ -13,7 +15,9 @@ struct Cli {
 
 #[derive(ValueEnum, Clone, Debug)]
 enum Target {
-    Ir,
+    Tokens,
+    AST,
+    IR,
     Asm,
     ELF,
 }
@@ -41,22 +45,29 @@ impl ToString for Pass {
 enum Commands {
     Build {
         /// File to compile
-        #[arg(short, long, default_value = "main.zg")]
+        #[arg(short = 'i', long, default_value = "main.zg")]
         file: PathBuf,
         /// Output file path
         #[arg(short, long, default_value = "a.out")]
-        output: Option<PathBuf>,
+        output: PathBuf,
+        /// Force write
+        #[arg(short, long, default_value_t = false)]
+        force: bool,
         /// Target output type
         #[arg(short, long, value_enum, default_value_t = Target::ELF)]
         target: Target,
     },
     Run {
         /// File to run
-        #[arg(short, long, default_value = "main.zg")]
+        #[arg(short = 'i', long, default_value = "main.zg")]
         file: PathBuf,
         /// Output file path
         #[arg(short, long, default_value = "a.out")]
-        output: Option<PathBuf>,
+        output: PathBuf,
+        /// Force write
+        #[arg(short, long, default_value_t = false)]
+        force: bool,
+
         #[arg(last = true)]
         args: Vec<String>,
     },
@@ -71,10 +82,30 @@ enum Commands {
 }
 
 pub fn run() {
+    use super::utils::*;
     use Commands::*;
 
     match Cli::parse().command {
-        Build { .. } => println!("Building..."),
+        Build {
+            file,
+            output,
+            target,
+            force,
+        } => {
+            let file_str = load_file(&file).expect("Bad file.");
+            println!("{}", file_str);
+            let out_str = match target {
+                Target::Tokens => format!("{:#?}", targets::tokenize(&file_str)),
+                Target::AST => format!(
+                    "{:#?}",
+                    targets::build_ast(&file_str, file.to_str().expect("Bad Path"))
+                ),
+                Target::IR => todo!(),
+                Target::Asm => todo!(),
+                Target::ELF => todo!(),
+            };
+            save_to_file(&output, &out_str, force);
+        }
         Run { .. } => println!("Running..."),
         Verify { .. } => println!("Verifying..."),
     }

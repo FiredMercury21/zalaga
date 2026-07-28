@@ -27,7 +27,7 @@ impl std::str::FromStr for Prim {
 
 // Populates scope table for AST root node, checking
 // scope of every node & expression along the way.
-fn populate_scope(root: &Node) -> Result<ScopeTable, ScopeError> {
+pub fn populate_scope(root: &Node) -> Result<ScopeTable, ScopeError> {
     // Init table and scope.
     let mut table = ScopeTable {
         scopes: Vec::new(),
@@ -53,7 +53,7 @@ fn populate_scope(root: &Node) -> Result<ScopeTable, ScopeError> {
 
 // Converts a NodeType::Type node to a string.
 fn node_type_to_str(node: &Node) -> String {
-    let NodeType::Type { name: mut current } = node.node.clone() else {
+    let NodeKind::Type { name: mut current } = node.node.clone() else {
         unreachable!()
     };
     loop {
@@ -71,10 +71,10 @@ fn node_type_to_str(node: &Node) -> String {
 // Converts Node { NodeType::Type { .. } .. } to self::Type.
 // REALLY gotta choose more descriptive names, damn.
 fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
-    let NodeType::Type { name } = &node.node else {
+    let NodeKind::Type { name } = &node.node else {
         unreachable!()
     };
-    let mut current = name;
+    let mut current = name; // Why double ref? Idk. Only way inner worked.
     let mut base: Type;
     let mut ref_n = 0;
 
@@ -93,7 +93,7 @@ fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
             }
             TypeNode::Ref(inner) => {
                 ref_n += 1;
-                current = inner;
+                current = &**inner; // I have NO IDEA WHY, but this is the only way it works.
             }
         }
     }
@@ -188,7 +188,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
             name,
         } => {
             // Check if function already declared in current scope
-            if table.scopes[current].functions.contains_key(&name) {
+            if table.scopes[current].functions.contains_key(name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 
@@ -244,7 +244,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
             var_type,
         } => {
             // Check if var already declared in current scope
-            if table.scopes[current].vars.contains_key(&name) {
+            if table.scopes[current].vars.contains_key(name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 
@@ -264,7 +264,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
 
         StructDec { name, fields } => {
             // Check if struct already declared in current scope
-            if table.scopes[current].types.contains_key(&name) {
+            if table.scopes[current].types.contains_key(name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 
@@ -272,14 +272,14 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
             let mut offset = 0;
             for field in fields {
                 // Each is a var dec.
-                let NodeType::VarDec { name, var_type, .. } = &field.node else {
+                let NodeKind::VarDec { name, var_type, .. } = &field.node else {
                     unreachable!()
                 };
 
                 // Check type.
-                let Some(field_type) = node_to_type(var_type, current, table) else {
+                let Some(field_type) = node_to_type(&*var_type, current, table) else {
                     return Err(UndefinedType {
-                        name: node_type_to_str(var_type),
+                        name: node_type_to_str(&*var_type),
                     });
                 };
 
@@ -297,7 +297,7 @@ fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(
 
         EnumDec { name, variants } => {
             // Check if enum already declared in current scope
-            if table.scopes[current].types.contains_key(&name) {
+            if table.scopes[current].types.contains_key(name) {
                 return Err(AlreadyDeclared { name: name.clone() });
             }
 

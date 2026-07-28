@@ -93,8 +93,11 @@ impl FilePos {
             start: self.0,
             end: self.0 + interval,
         };
-        self.0 += interval;
+        self.advance(interval);
         span
+    }
+    fn advance(&mut self, interval: usize) {
+        self.0 += interval
     }
 }
 
@@ -131,12 +134,15 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
     let look = &mut cleaned.chars().peekable();
     let mut toks = Vec::new();
     let mut interval = 0;
-    let cursor = FilePos::default();
+    let mut cursor = FilePos::default();
 
     while let Some(c) = look.next() {
         toks.push(Token {
             tok_type: match c {
-                ' ' => continue,
+                ' ' => {
+                    cursor.advance(1);
+                    continue;
+                }
 
                 // Stop chars.
                 // Surely there's a more elegant way?
@@ -209,6 +215,8 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 }
 
                 '\t' => {
+                    // ERROR: Not right byte offset...
+                    // For spaces are converted to tabs, but tabs can already exist.
                     interval = 4;
                     Indent
                 }
@@ -355,7 +363,9 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     // Comments
                     Some('/') => {
                         look.next();
-                        look.peek_while::<_, String>(|c: &char| *c != '\n');
+                        cursor.advance(2);
+                        let comment = look.peek_while::<_, String>(|c: &char| *c != '\n');
+                        cursor.advance(comment.len());
                         continue;
                     }
                     _ => {
@@ -390,7 +400,10 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 }
 
                 // Else
-                _ => Illegal(c),
+                _ => {
+                    interval = 1;
+                    Illegal(c)
+                }
             },
 
             index: cursor.span(interval),
@@ -401,13 +414,14 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
     // to just single Indents and Dedents when needed.
 
     // Nasty method chaining, but the imperative version was way worse.
-    let mut output = stream
+    // I don't like how many type annotations are needed. Any way to elide?
+    let mut output: Vec<Token> = toks
         // Split by Newline
         .split(|tok| tok.tok_type == Newline)
         // Split lines into (indents, post)
         .map(|line| split_once(line, |tok| tok.tok_type != Indent))
         // Remove all blank lines
-        .filter(|(_, post)| post.is_empty())
+        .filter(|&(_, post): &(_, &[Token])| !post.is_empty())
         // Add an empty line at end to make last indents work.
         .chain(std::iter::once((&[] as &[Token], &[] as &[Token])))
         // Turn into vec for windows() to pair stuff
@@ -419,6 +433,11 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
             // w[1] = next line, w[0] = this line, both are (indents, post).
             let indent_delta = (w[1].0.len() as isize) - (w[0].0.len() as isize);
             let mut indents = Vec::new();
+            let next_line_idx = w[1]
+                .1
+                .get(0)
+                .map(|tok| tok.index.clone())
+                .unwrap_or(cursor.span(0));
             for i in 0..indent_delta.unsigned_abs() {
                 // To make spans work, we copy from actual line.
                 indents.push(if indent_delta > 0 {
@@ -429,24 +448,32 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 } else {
                     Token {
                         tok_type: Dedent,
-                        index: w[1].1[0].index.clone(),
+                        index: next_line_idx.clone(),
                     }
                 });
             }
-            // Add Newline back.
-            indents.push(Token {
+            // Add Newline temporary.
+            let newline = Token {
                 tok_type: Newline,
-                index: w[1].1[0].index,
-            });
+                index: next_line_idx,
+            };
             // Return the 'post' of this line with indents appended.
-            w[0].1.iter().chain(indents.iter()).collect()
+            w[0].1
+                .iter()
+                .cloned()
+                .chain(std::iter::once(newline))
+                .chain(indents.iter().cloned())
+                .collect::<Vec<Token>>()
         })
         .collect();
 
     // Add EOF.
     output.push(Token {
         tok_type: Eof,
-        index: output.last().expect("Empty File").index.clone(),
+        index: output
+            .last()
+            .map(|tok| tok.index.clone())
+            .unwrap_or(cursor.span(0)),
     });
 
     output
