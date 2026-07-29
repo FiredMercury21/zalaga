@@ -170,6 +170,12 @@ pub enum ParseErrorKind {
 
 /*---Helper functions---*/
 
+impl Spanned for ParseError {
+    fn span(&self) -> Span {
+        self.span.clone()
+    }
+}
+
 // String to binary operator
 fn is_bin_op(op: &Operator) -> bool {
     use Operator::*;
@@ -352,6 +358,7 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
 
     code.expect_else(RBrack, FnNoParen)?;
     code.expect_else(Arrow, FnNoRetType)?;
+
     let Ok(ret_type) = parse_type(code) else {
         return Err(ParseError {
             err: FnNoRetType,
@@ -359,10 +366,9 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         });
     };
     let ret_type = Box::new(ret_type);
-    println!("{:#?}", code.peek());
+
     code.expect_else(Colon, FnNoRetType)?;
     code.expect_else(Newline, FnSyntax)?;
-    code.expect_else(Indent, FnSyntax)?;
 
     let body = parse_block(code)?;
 
@@ -467,6 +473,23 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         Op(op) if is_un_op(&op) => {
             let expr = Box::new(parse_expr(code, 0)?);
             code.new_expr(UnOp { op, expr })
+        }
+
+        // Negative numbers?
+        Op(Operator::Sub) => {
+            let Some(TokType::Num(x)) = code.next() else {
+                return Err(ParseError {
+                    err: BadNegation,
+                    span: code.last_idx(),
+                });
+            };
+            let expr = Box::new(code.new_expr(Const {
+                val: Constant::Num(x.parse().unwrap()),
+            }));
+            code.new_expr(UnOp {
+                op: Operator::Neg,
+                expr,
+            })
         }
 
         // If statement
@@ -710,7 +733,7 @@ fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
         code.next();
         code.expect_ident_else(ParseErrorKind::ImportNoAlias)?
     } else {
-        module_name.base()
+        module_name.base().to_string()
     };
     Ok(code.new_node(Use { name, root }))
 }
@@ -884,7 +907,7 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
 }
 
 fn parse_path(code: &mut Cursor) -> Result<Path, ParseError> {
-    let mut path = Path::new();
+    let mut path = Path::default();
     loop {
         path.push(code.expect_ident_else(BadPath)?);
         if matches!(code.peek(), Some(Separator)) {
@@ -897,9 +920,9 @@ fn parse_path(code: &mut Cursor) -> Result<Path, ParseError> {
 }
 
 fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
-    // if stuff == bleh:
+    // if foo == bar:
     //     expression
-    // elif otherstuff:
+    // elif baz:
     //     expression
     // else:
 
