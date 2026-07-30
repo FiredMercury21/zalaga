@@ -302,7 +302,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     if Some(&'.') == look.peek() {
                         look.next();
                         let post = look.peek_while::<_, String>(|c: &char| c.is_ascii_digit());
-                        let num = dig + &post;
+                        let num = dig + "." + &post;
                         interval = num.len();
                         Float(num)
                     } else {
