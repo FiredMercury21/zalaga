@@ -1,5 +1,4 @@
 use super::ast_types::*;
-use std::ops::Add;
 
 use crate::utils::PeekExt;
 
@@ -50,6 +49,10 @@ fn split_once(arr: &[Token], pred: impl FnMut(&Token) -> bool) -> (&[Token], &[T
 pub fn tokenize_code(code: &str) -> Vec<Token> {
     use Operator::*;
     use TokType::*;
+
+    if code.is_empty() {
+        return Vec::new(); // Errors downstream?
+    }
 
     let cleaned = conv_code_ws(code);
     let look = &mut cleaned.chars().peekable();
@@ -266,16 +269,16 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     Some(x) => match look.peek() {
                         Some('\'') => {
                             look.next();
-                            interval = 2;
+                            interval = 3;
                             Char(x)
                         }
                         _ => {
-                            interval = 1;
+                            interval = 2;
                             Illegal(c) // x is lost!! Bad. But only in bad syntax.
                         }
                     },
                     _ => {
-                        interval = 1;
+                        interval = 2;
                         Illegal(c)
                     }
                 },
