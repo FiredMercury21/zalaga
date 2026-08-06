@@ -1,23 +1,23 @@
 use std
-use std::vec // Vec is an integer vector.
+use std::vec
 
-fn main() {
-    let code = ">++++++++[<+++++++++>-]<.>++++[<+++++++>-]<+.+++++++..+++.>>++++++[<+++++++>-]<++.------------.>++++++[<+++++++++>-]<+.<.+++.------.--------.>>>++++[<++++++++>-]<+."
-    let result = run(code)
+fn main():
+    var code = ">++++++++[<+++++++++>-]<.>++++[<+++++++>-]<+.+++++++..+++.>>++++++[<+++++++>-]<++.------------.>++++++[<+++++++++>-]<+.<.+++.------.--------.>>>++++[<++++++++>-]<+."
+    var result = run(code)
     if result != 0:
         std::print("Error running code")
     std::print("Successful run")
-}
+
 
 fn run(code: &char) -> int:
     var tape = vec::new(10000)
     var ptr = 0
-    for (var c = 0; c < code.len(); ++c):
+    for (var c = 0; c < std::str_len(code); ++c):
         match #(code + c):
             // Cursor movement
             '>' -> {
                 ptr += 1
-                if ptr >= tape.len() {
+                if ptr >= vec::len(tape) {
                     vec::push(tape, 0)
                 }
             },
@@ -37,7 +37,7 @@ fn run(code: &char) -> int:
             '.' -> std::print(std::itoa(vec::get(tape, ptr))),
             ',' -> vec::set(tape, ptr, std::read()),
 
-            // Recursion
+            // Looping
             '[' -> {
                 if vec::get(tape, ptr) == 0:
                     for (var depth = 1; depth > 0; ++c):
