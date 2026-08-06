@@ -1,6 +1,6 @@
 use crate::ast::ast_types::*;
-use crate::semantics::types::*;
-use std::collections::HashMap;
+use crate::semantics::sem_types::*;
+use std::collections::{HashMap, HashSet};
 
 // String to primitive type
 impl std::str::FromStr for Prim {
@@ -29,19 +29,14 @@ impl std::str::FromStr for Prim {
 // scope of every node & expression along the way.
 pub fn populate_scope(root: &Node) -> Result<ScopeTable, ScopeError> {
     // Init table and scope.
-    let mut table = ScopeTable {
-        scopes: Vec::new(),
-        node_scope: HashMap::new(),
-    };
+    let mut table = ScopeTable::default();
     let global_id = table.new_scope(None, root.id); // Should be 0.
     let NodeKind::Module { global, .. } = &root.node else {
         unreachable!()
     };
 
-    // Small pass for declarations.
-    for node in global {
-        register_dec(&mut table, &node, global_id)?;
-    }
+    // Small pass to register types, then vars and functions.
+    register_dec(&mut table, global, global_id)?;
 
     // Check scope of everything.
     for node in global {
@@ -59,51 +54,242 @@ fn node_type_to_str(node: &Node) -> String {
     loop {
         match current {
             TypeNode::Base(path) => {
-                return path.base();
+                return path.base().to_string();
             }
             TypeNode::Ref(inner) => {
                 current = *inner;
+            }
+            TypeNode::Infer => {
+                return "infer".to_string();
             }
         }
     }
 }
 
-// Converts Node { NodeType::Type { .. } .. } to self::Type.
-// REALLY gotta choose more descriptive names, damn.
-fn node_to_type(node: &Node, idx: usize, table: &ScopeTable) -> Option<Type> {
+// Traverse type declarations, check no recursive types.
+fn check_recursive(lines: &Vec<Node>) -> Result<(), ScopeError> {
+    use NodeKind::*;
+
+    // HashMap of Type (String) -> Dependecies in current scope
+    let mut type_deps: HashMap<String, (Vec<String>, Span)> = HashMap::new();
+
+    // Types declared in current scope.
+    let mut type_strs: HashSet<String> = HashSet::new();
+    for line in lines.iter() {
+        if let StructDec { name, .. } | EnumDec { name, .. } = &line.node {
+            if !type_strs.insert(name.clone()) {
+                return Err(ScopeError {
+                    kind: ScopeErrorKind::AlreadyDeclared { name: name.clone() },
+                    span: line.span(),
+                });
+            }
+        };
+    }
+
+    fn is_local_dep(type_strs: &HashSet<String>, ty: &Node) -> Option<String> {
+        if let Type {
+            name: TypeNode::Base(path),
+            ..
+        } = &ty.node
+        {
+            if !path.is_module_path() && type_strs.contains(path.base()) {
+                return Some(path.base().to_string());
+            }
+        }
+        None
+    }
+
+    for n in lines {
+        let (name, (dependencies, span)) = match &n.node {
+            StructDec { name, fields } => (
+                name.clone(),
+                // Find non-reference dependencies in current scope, for recursion check.
+                (
+                    fields
+                        .iter()
+                        .filter_map(|field| is_local_dep(&type_strs, &field))
+                        .collect::<Vec<String>>(),
+                    n.span(),
+                ),
+            ),
+            EnumDec { name, variants } => (
+                name.clone(),
+                (
+                    variants
+                        .iter()
+                        .filter_map(|variant| variant.var_type.as_deref())
+                        .filter_map(|n| is_local_dep(&type_strs, n))
+                        .collect::<Vec<String>>(),
+                    n.span(),
+                ),
+            ),
+            _ => continue,
+        };
+        // Insert dependencies to list.
+        type_deps.insert(name.clone(), (dependencies, span));
+    }
+
+    // 3-Colour graph. Like in rustc?
+    // It's called 3-Colour but we only need two; Type not being
+    // in the Type->State HashMap functions as a third, 'TBD'.
+    enum DepState {
+        Doing,
+        Done,
+    }
+
+    fn recurse_check(
+        check: &Vec<String>,
+        deps: &HashMap<String, (Vec<String>, Span)>,
+        states: &mut HashMap<String, DepState>,
+    ) -> Result<(), ScopeError> {
+        for dep in check.iter() {
+            match states.get(dep) {
+                Some(DepState::Doing) => {
+                    return Err(ScopeError {
+                        kind: ScopeErrorKind::RecursiveType { ty: dep.clone() },
+                        span: deps[dep].1.clone(),
+                    });
+                }
+                Some(DepState::Done) => continue,
+                _ => {}
+            }
+            states.insert(dep.clone(), DepState::Doing);
+            recurse_check(&deps[dep].0, deps, states)?;
+            states.insert(dep.clone(), DepState::Done);
+        }
+        Ok(())
+    }
+
+    let mut states = HashMap::new();
+    for ty in &type_strs {
+        recurse_check(&type_deps[ty].0, &type_deps, &mut states)?;
+    }
+
+    Ok(())
+}
+
+fn build_type(
+    ty_path: &Path,
+    span: Span,
+    idx: usize,
+    table: &mut ScopeTable,
+    decls: &HashMap<String, &Node>,
+) -> Result<Type, ScopeError> {
+    if ty_path.is_module_path() {
+        return table.get_type(ty_path, idx).ok_or(ScopeError {
+            kind: ScopeErrorKind::UndefinedType {
+                path: ty_path.clone(),
+            },
+            span,
+        });
+    }
+
+    fn destruct_structdec(node: &Node) -> (String, Box<Node>) {
+        if let NodeKind::VarDec { name, var_type, .. } = &node.node {
+            (name.clone(), var_type.clone())
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn destruct_enumvar(evar: &EnumVariant) -> (String, Option<Box<Node>>) {
+        let EnumVariant { name, var_type } = evar;
+        (name.clone(), var_type.clone())
+    }
+
+    if let Some(node) = decls.get(&ty_path.base().to_string()) {
+        Ok(match &node.node {
+            NodeKind::StructDec { name, fields } => TypeKind::Struct(Struct {
+                name: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|n| destruct_structdec(n))
+                    .map(|(name, var_ty)| {
+                        node_dec_type(&*var_ty, idx, table, decls).map(|t| (name, t))
+                    })
+                    .collect::<Result<Vec<(String, Type)>, ScopeError>>()?
+                    .into_iter()
+                    .scan((String::new(), Type::void(), 0), |(_, _, offset), x| {
+                        let ret = (x.0, x.1, *offset);
+                        *offset += ret.1.size;
+                        Some(ret)
+                    })
+                    .collect(),
+            }),
+            NodeKind::EnumDec { name, variants } => TypeKind::Enum(Enum {
+                name: name.clone(),
+                variants: variants
+                    .iter()
+                    .map(|evar| destruct_enumvar(evar))
+                    .map(|(name, var_type)| {
+                        var_type
+                            .clone()
+                            .map(|t| node_dec_type(&*t, idx, table, decls))
+                            .transpose()
+                            .map(|t| (name.clone(), t))
+                    })
+                    .collect::<Result<Vec<(String, Option<Type>)>, ScopeError>>()?,
+            }),
+            _ => unreachable!(),
+        }
+        .to_type())
+    } else {
+        return Err(ScopeError {
+            kind: ScopeErrorKind::UndefinedType {
+                path: ty_path.clone(),
+            },
+            span,
+        });
+    }
+}
+
+pub fn node_to_type(node: &Node, idx: usize, table: &mut ScopeTable) -> Result<Type, ScopeError> {
+    node_dec_type(node, idx, table, &HashMap::new())
+}
+
+fn node_dec_type(
+    node: &Node,
+    idx: usize,
+    table: &mut ScopeTable,
+    decls: &HashMap<String, &Node>,
+) -> Result<Type, ScopeError> {
     let NodeKind::Type { name } = &node.node else {
         unreachable!()
     };
-    let mut current = name; // Why double ref? Idk. Only way inner worked.
-    let mut base: Type;
+    let mut current = name;
+    let mut base;
     let mut ref_n = 0;
 
     loop {
         match current {
             TypeNode::Base(path) => {
                 if let Ok(ty) = path.base().parse::<Prim>() {
-                    base = TypeType::Prim(ty).to_type();
-                    break;
+                    base = ty.into();
+                } else if decls.get(&node_type_to_str(node)).is_some() {
+                    return build_type(path, node.span(), idx, table, decls);
+                } else {
+                    base = table.get_type(path, idx).ok_or(ScopeError {
+                        kind: ScopeErrorKind::UndefinedType { path: path.clone() },
+                        span: node.span(),
+                    })?;
                 }
-                if let Some(ty) = table.get_type(&path, idx) {
-                    base = ty.to_owned();
-                    break;
-                }
-                return None;
+                break;
             }
             TypeNode::Ref(inner) => {
                 ref_n += 1;
-                current = &**inner; // I have NO IDEA WHY, but this is the only way it works.
+                current = &**inner;
+            }
+            TypeNode::Infer => {
+                base = self::Type::infer();
+                break;
             }
         }
     }
+    let mut output = base;
     for _ in 0..ref_n {
-        base = Type {
-            ty: TypeType::Prim(Prim::Ref(Box::new(base.ty))),
-            size: 8,
-        }
+        output = Prim::Ref(Box::new(output.ty)).into()
     }
-    Some(base)
+    Ok(output)
 }
 
 // Checks scope of a node!
@@ -112,7 +298,24 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
 
     match &node.node {
         // Handled by other guards using register_dec() on blocks.
-        FnDec { .. } | StructDec { .. } | EnumDec { .. } | VarDec { .. } | Use { .. } => {}
+        StructDec { .. } | EnumDec { .. } | Use { .. } => {}
+        VarDec { expr, .. } => {
+            if let Some(expr) = expr {
+                scope_expr(table, &expr, current)?;
+            }
+        }
+
+        FnDec { body, args, .. } => {
+            let idx = table.new_scope(Some(current), node.id);
+            for arg in args {
+                let VarDec { name, var_type, .. } = &arg.node else {
+                    unreachable!()
+                };
+                let arg_ty = node_to_type(&*var_type, idx, table)?;
+                table.scopes[idx].vars.insert(name.clone(), arg_ty);
+            }
+            scope_expr(table, &body, idx)?;
+        }
 
         Statement { expr } => {
             scope_expr(table, &expr, current)?;
@@ -121,36 +324,38 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
         Guard { patt, expr } => {
             use Pattern::*;
 
+            // Guard has to have its own scope, because then the expressions
+            // underneath will have access to bound variables.
+            let idx = table.new_scope(Some(current), node.id);
+
             match patt {
-                All | Val { .. } => scope_expr(table, &expr, current)?,
+                All | Val { .. } => scope_expr(table, &expr, idx)?,
                 Variant { payload: var, .. } | Var { name: var } => {
-                    // expr is a block. We need to inject bound var or payload into it.
                     // For now, put the placeholder type of Never on the var.
                     // It shouldn't cause any issues? We check types later.
-                    let idx = table.new_scope(Some(current), expr.id);
                     table.scopes[idx]
                         .vars
-                        .insert(var.clone(), self::Type::never());
+                        .insert(var.clone(), self::Type::infer());
                     scope_expr(table, &expr, idx)?;
                 }
             }
         }
 
-        // TODO:
-        // Both for and while have predicates. This split control flow.
-        // That conflicts whether or not a variable is initialized.
-        // So we need to resolve it somehow between branches. Ughhh.
-        // Prob done in flow_graph.
         For {
             init,
             pred,
             then,
             block,
         } => {
-            let idx = table.new_scope(Some(current), block.id);
+            let idx = table.new_scope(Some(current), node.id);
 
             // Add var to for block scope.
-            register_dec(table, &init, idx)?;
+            if let NodeKind::VarDec { name, var_type, .. } = &init.node {
+                let ty = node_to_type(&**var_type, idx, table)?;
+                table.scopes[idx].vars.insert(name.clone(), ty);
+            } else {
+                unreachable!()
+            }
 
             // Check scopes underneath.
             scope_expr(table, &pred, idx)?;
@@ -159,9 +364,8 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
         }
 
         While { pred, block } => {
-            let idx = table.new_scope(Some(current), block.id);
-            scope_expr(table, &pred, idx)?;
-            scope_expr(table, &block, idx)?;
+            scope_expr(table, &pred, current)?;
+            scope_expr(table, &block, current)?;
         }
 
         Type { .. } => unreachable!(),
@@ -170,199 +374,182 @@ fn scope_node(table: &mut ScopeTable, node: &Node, current: usize) -> Result<(),
     Ok(())
 }
 
-// If given node is declaration, add it to scope. Else, ignore.
-fn register_dec(table: &mut ScopeTable, root: &Node, current: usize) -> Result<(), ScopeError> {
+fn register_modules(
+    table: &mut ScopeTable,
+    lines: &Vec<Node>,
+    current: usize,
+) -> Result<(), ScopeError> {
     use NodeKind::*;
-    use ScopeError::*;
+    use ScopeErrorKind::*;
 
-    match &root.node {
-        FnDec {
-            args,
-            body,
-            ret_type,
-            name,
-        } => {
-            // Check if function already declared in current scope
-            if table.scopes[current].functions.contains_key(name) {
-                return Err(AlreadyDeclared { name: name.clone() });
-            }
-
-            // New scope for function body.
-            let idx = table.new_scope(Some(current), body.id);
-
-            // Add each arg to current scope.
-            let mut arg_types = Vec::new();
-            for arg in args {
-                // Each is a var dec.
-                let VarDec { name, var_type, .. } = &arg.node else {
-                    unreachable!()
-                };
-                // How to get non-sequential declarations?
-                let Some(arg_type) = node_to_type(&var_type, current, table) else {
-                    return Err(UndefinedType {
-                        name: node_type_to_str(&var_type),
-                    });
-                };
-                // Add arg to scope.
-                table.scopes[idx]
-                    .vars
-                    .insert(name.clone(), arg_type.clone());
-                arg_types.push(arg_type);
-            }
-
-            // Add function to parent scope.
-            let fn_type = self::Type {
-                ty: TypeType::Fn {
-                    args: arg_types,
-                    ret: match node_to_type(&ret_type, idx, table) {
-                        Some(ty) => Box::new(ty),
-                        None => {
-                            return Err(UndefinedType {
-                                name: node_type_to_str(&ret_type),
-                            });
-                        }
-                    },
-                },
-                size: 0,
-            };
-            table.scopes[current]
-                .functions
-                .insert(name.clone(), fn_type);
-
-            // Check scopes of body.
-            scope_expr(table, &body, idx)?;
-        }
-
-        VarDec {
-            name,
-            expr,
-            var_type,
-        } => {
-            // Check if var already declared in current scope
-            if table.scopes[current].vars.contains_key(name) {
-                return Err(AlreadyDeclared { name: name.clone() });
-            }
-
-            let ty = node_to_type(&var_type, current, table);
-            if let Some(expr) = expr {
-                scope_expr(table, &expr, current)?;
-                //inits.insert(name.clone());
-            }
-            if let Some(ty) = ty {
-                table.scopes[current].vars.insert(name.clone(), ty);
-            } else {
-                return Err(UndefinedType {
-                    name: node_type_to_str(&var_type),
-                });
-            }
-        }
-
-        StructDec { name, fields } => {
-            // Check if struct already declared in current scope
-            if table.scopes[current].types.contains_key(name) {
-                return Err(AlreadyDeclared { name: name.clone() });
-            }
-
-            let mut fields_vec: Vec<(String, self::Type, u32)> = Vec::new();
-            let mut offset = 0;
-            for field in fields {
-                // Each is a var dec.
-                let NodeKind::VarDec { name, var_type, .. } = &field.node else {
-                    unreachable!()
-                };
-
-                // Check type.
-                let Some(field_type) = node_to_type(&*var_type, current, table) else {
-                    return Err(UndefinedType {
-                        name: node_type_to_str(&*var_type),
-                    });
-                };
-
-                fields_vec.push((name.clone(), field_type.clone(), offset));
-                offset += field_type.size; // Non-C-ABI compat? Change.
-            }
-            let ty = TypeType::Struct(Struct {
-                name: name.clone(),
-                fields: fields_vec,
-            });
-            table.scopes[current]
-                .types
-                .insert(name.clone(), ty.to_type());
-        }
-
-        EnumDec { name, variants } => {
-            // Check if enum already declared in current scope
-            if table.scopes[current].types.contains_key(name) {
-                return Err(AlreadyDeclared { name: name.clone() });
-            }
-
-            let mut variants_vec = Vec::new();
-            for v in variants {
-                // More elegant way to do it?
-                let ty = match &v.var_type {
-                    Some(ty) => match node_to_type(ty, current, table) {
-                        Some(ty) => Some(ty),
-                        None => {
-                            return Err(UndefinedType {
-                                name: node_type_to_str(ty),
-                            });
-                        }
-                    },
-                    None => None,
-                };
-                variants_vec.push((v.name.clone(), ty));
-            }
-            let ty = TypeType::Enum(Enum {
-                name: name.clone(),
-                variants: variants_vec,
-            });
-            table.scopes[current]
-                .types
-                .insert(name.clone(), ty.to_type());
-        }
-
-        Use { name, root } => {
-            if table.scopes[current].modules.contains_key(name) {
-                return Err(AlreadyDeclared { name: name.clone() });
-            }
-            let module_scope = match populate_scope(root) {
-                Ok(module_scope) => module_scope,
-                Err(e) => {
-                    return Err(ErrInModule {
-                        err: Box::new(e),
-                        mod_name: name.clone(),
+    for line in lines {
+        match &line.node {
+            Use { name, root } => {
+                if table.scopes[current].modules.contains_key(name) {
+                    return Err(ScopeError {
+                        kind: AlreadyDeclared { name: name.clone() },
+                        span: line.span(),
                     });
                 }
-            };
-            table.scopes[current]
-                .modules
-                .insert(name.clone(), module_scope);
+                let module_scope = match populate_scope(root) {
+                    Ok(module_scope) => module_scope,
+                    Err(e) => {
+                        return Err(ScopeError {
+                            kind: ErrInModule {
+                                err: Box::new(e),
+                                mod_name: name.clone(),
+                            },
+                            span: line.span(),
+                        });
+                    }
+                };
+                table.scopes[current]
+                    .modules
+                    .insert(name.clone(), module_scope);
+            }
+            _ => {}
         }
-
-        _ => {}
     }
+    Ok(())
+}
+
+// If given node is declaration, add it to scope. Else, ignore.
+fn register_type_dec(
+    table: &mut ScopeTable,
+    lines: &Vec<Node>,
+    current: usize,
+) -> Result<(), ScopeError> {
+    use NodeKind::*;
+    use ScopeErrorKind::*;
+    let mut types = HashMap::new();
+
+    for line in lines {
+        match &line.node {
+            StructDec { name, .. } | EnumDec { name, .. } => {
+                if types.insert(name.clone(), line).is_some() {
+                    return Err(ScopeError {
+                        kind: AlreadyDeclared { name: name.clone() },
+                        span: line.span(),
+                    });
+                }
+            }
+
+            _ => {}
+        }
+    }
+    // Build types and add to scope.
+    for (ty_name, ty) in &types {
+        let t = build_type(&ty_name.as_str().into(), ty.span(), current, table, &types)?;
+        table.scopes[current].types.insert(ty_name.clone(), t);
+    }
+    Ok(())
+}
+
+fn find_type_decs(lines: &Vec<Node>) -> HashMap<String, &Node> {
+    let mut ty_decls = HashMap::new();
+    for line in lines {
+        match &line.node {
+            NodeKind::StructDec { name, .. } | NodeKind::EnumDec { name, .. } => {
+                ty_decls.insert(name.clone(), line);
+            }
+            _ => {}
+        }
+    }
+    ty_decls
+}
+
+fn register_var_fn_dec(
+    table: &mut ScopeTable,
+    lines: &Vec<Node>,
+    current: usize,
+    ty_decls: &HashMap<String, &Node>,
+) -> Result<(), ScopeError> {
+    use NodeKind::*;
+    use ScopeErrorKind::*;
+    for node in lines {
+        match &node.node {
+            FnDec {
+                name,
+                args,
+                ret_type,
+                ..
+            } => {
+                // Check if function already declared in current scope
+                if table.scopes[current].functions.contains_key(name) {
+                    return Err(ScopeError {
+                        kind: AlreadyDeclared { name: name.clone() },
+                        span: node.span(),
+                    });
+                }
+
+                // Add each arg to FnType.
+                let arg_types = args
+                    .iter()
+                    .map(|arg| {
+                        let VarDec { var_type, .. } = &arg.node else {
+                            unreachable!()
+                        };
+                        node_dec_type(&var_type, current, table, ty_decls)
+                    })
+                    .collect::<Result<Vec<self::Type>, ScopeError>>()?;
+
+                // Add function to parent scope.
+                let fn_type = TypeKind::Fn {
+                    args: arg_types,
+                    ret: Box::new(node_dec_type(&ret_type, current, table, ty_decls)?),
+                }
+                .to_type();
+                table.scopes[current]
+                    .functions
+                    .insert(name.clone(), fn_type);
+            }
+
+            VarDec { name, var_type, .. } => {
+                // Check if var already declared in current scope
+                if table.scopes[current].vars.contains_key(name) {
+                    return Err(ScopeError {
+                        kind: AlreadyDeclared { name: name.clone() },
+                        span: node.span(),
+                    });
+                }
+
+                let ty = node_dec_type(&var_type, current, table, ty_decls)?;
+                table.scopes[current].vars.insert(name.clone(), ty);
+            }
+
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn register_dec(
+    table: &mut ScopeTable,
+    lines: &Vec<Node>,
+    current: usize,
+) -> Result<(), ScopeError> {
+    register_modules(table, lines, current)?;
+    check_recursive(lines)?;
+    register_type_dec(table, lines, current)?;
+    let type_decls = find_type_decs(lines);
+    register_var_fn_dec(table, lines, current, &type_decls)?;
     Ok(())
 }
 
 // Checks scope of an expression.
 fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(), ScopeError> {
     use ExprKind::*;
-    use ScopeError::*;
+    use ScopeErrorKind::*;
 
     match &expr.expr {
         Var { path } => {
             if table.get_var(path, current).is_none() {
-                return Err(UndefinedVar {
-                    name: path.base().clone(),
+                return Err(ScopeError {
+                    kind: UndefinedVar { path: path.clone() },
+                    span: expr.span(),
                 });
             }
         }
-
-        // TODO:
-        // Both match and if have predicates. This split control flow.
-        // That conflicts whether or not a variable is initialized.
-        // So we need to resolve it between branches.
-        // Perhaps done in flow_graph.rs?
         Match { expr, grds } => {
             scope_expr(table, expr, current)?;
             for grd in grds {
@@ -384,10 +571,7 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
             // The only expression that has its own scope!
             // Use it in others if you want...
             let idx = table.new_scope(Some(current), expr.id);
-            for node in lines {
-                // Declarations.
-                register_dec(table, node, idx)?;
-            }
+            register_dec(table, lines, idx)?;
             for node in lines {
                 // Scopes.
                 scope_node(table, node, idx)?;
@@ -398,7 +582,10 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
                 scope_expr(table, arg, current)?;
             }
             if table.get_fn(path, current).is_none() {
-                return Err(UndefinedFn { name: path.base() });
+                return Err(ScopeError {
+                    kind: UndefinedFn { path: path.clone() },
+                    span: expr.span(),
+                });
             }
         }
         Field { base, field } => {
@@ -408,10 +595,15 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
         }
         Struct { path, fields } => {
             for field in fields {
-                scope_expr(table, field, current)?;
+                scope_expr(table, field.1, current)?;
             }
+            // TODO: Easier, check structdec and see if all fields exist.
+            // Or is that init checker responsibility?
             if table.get_type(path, current).is_none() {
-                return Err(UndefinedType { name: path.base() });
+                return Err(ScopeError {
+                    kind: UndefinedType { path: path.clone() },
+                    span: expr.span(),
+                });
             }
         }
         Enum { path, variant, val } => {
@@ -420,17 +612,23 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
             }
 
             let Some(Type {
-                ty: TypeType::Enum(self::Enum { variants, .. }),
+                ty: TypeKind::Enum(self::Enum { variants, .. }),
                 ..
             }) = table.get_type(path, current)
             else {
-                return Err(UndefinedType { name: path.base() });
+                return Err(ScopeError {
+                    kind: UndefinedType { path: path.clone() },
+                    span: expr.span(),
+                });
             };
             // If variant is not found in declaration, return error.
             if !variants.iter().any(|v| v.0 == *variant) {
-                return Err(UndefinedEnumVariant {
-                    parent: path.base(),
-                    name: variant.clone(),
+                return Err(ScopeError {
+                    kind: UndefinedEnumVariant {
+                        parent: path.base().to_string(),
+                        name: variant.clone(),
+                    },
+                    span: expr.span(),
                 });
             }
         }
@@ -466,18 +664,16 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::diagnostics::PathCache;
 
     #[test]
     fn test_scope() {
-        use std::fs::File;
-        use std::io::prelude::*;
-        let mut file = File::open("./examples/quicksort.zg").unwrap();
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).unwrap();
-        let tokenized = crate::ast::lexer::tokenize_code(&contents);
-        let ast = crate::ast::tree::parse_file(tokenized, "test").unwrap();
-        println!("Were scopes right?");
-        println!("{}", populate_scope(&ast).is_ok());
+        use crate::cli::utils::*;
+
+        let file_str = load_file(&"examples/quicksort.zg".parse().expect("PathBuf"))
+            .expect("Unwrap file failed.");
+        let mut cache = PathCache::new();
+        let ast = verifiers::scope_check(&file_str, "quicksort", &mut cache);
+        println!("{:#?}", ast);
     }
 }
