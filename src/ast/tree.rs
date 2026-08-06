@@ -40,10 +40,8 @@ impl<'a> Cursor<'a> {
     pub fn last_idx(&self) -> Span {
         // Empty streams should be handled before Cursor is created.
         // Usually we use this function after we read a bad token.
-        match self.stream.get(self.pos - 1) {
-            Some(tok) => tok.index.clone(),
-            None => self.stream[self.pos.saturating_sub(2)].index.clone(),
-        }
+        let last_idx = self.pos.min(self.stream.len()).saturating_sub(1);
+        self.stream[last_idx].span()
     }
 
     pub fn new_id(&mut self) -> Id {
