@@ -197,11 +197,12 @@ fn is_bin_op(op: &Operator) -> bool {
 // String to unary operator
 fn is_un_op(op: &Operator) -> bool {
     use Operator::*;
-    matches!(op, Neg | Inc | Dec | Ref | Deref)
+    matches!(op, Not | Inc | Dec | Ref | Deref)
 }
 
 // Operator to precedence.
 // Higher value is higher precedence.
+// Remember that unary ops are all precedence 25.
 fn op_to_prec(op: &Operator) -> Option<i32> {
     use Operator::*;
 
@@ -212,13 +213,13 @@ fn op_to_prec(op: &Operator) -> Option<i32> {
         Div => 15,
         Exp => 20,
         Mod => 15,
-        LT => 5,
-        GT => 5,
-        ET => 5,
-        LorET => 5,
-        GorET => 5,
-        NotET => 5,
-        Or => 5,
+        LT => 7,
+        GT => 7,
+        ET => 6,
+        LorET => 7,
+        GorET => 7,
+        NotET => 6,
+        Or => 4,
         And => 5,
         Assign => 3,
 
@@ -501,17 +502,17 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         LSquirl | Indent => parse_block(code)?,
 
         // Unary operators.
-        // Both unary operators and Sub (negative) parse at precedence 20, higher than
-        // most other operators, ensuring proper binding. I think. Should it be 21?
+        // Both unary operators and Sub (negative) parse at precedence 25, higher than
+        // most other operators, ensuring proper binding. I think.
         Op(op) if is_un_op(&op) => {
-            let expr = Box::new(parse_expr(code, 20)?);
+            let expr = Box::new(parse_expr(code, 25)?);
             code.new_expr(UnOp { op, expr })
         }
 
         // Negative numbers.
         // We change 'Sub' to 'Neg' here.
         Op(Operator::Sub) => {
-            let expr = Box::new(parse_expr(code, 20)?);
+            let expr = Box::new(parse_expr(code, 25)?);
             code.new_expr(UnOp {
                 op: Operator::Neg,
                 expr,
@@ -608,12 +609,20 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             break;
         }
 
-        let new_prec = op_to_prec(&op).unwrap();
-        if new_prec < prec {
+        // Check if precedence tells us to leave.
+        let op_prec = op_to_prec(&op).unwrap();
+        if op_prec < prec {
             break;
         }
         code.next();
-        let second = Box::new(parse_expr(code, new_prec + 1)?);
+
+        // Associativity
+        let new_prec = match op {
+            Operator::Assign => op_prec, // Right-associative
+            _ => op_prec + 1,
+        };
+
+        let second = Box::new(parse_expr(code, new_prec)?);
 
         current = code.new_expr(BinOp {
             first: Box::new(current),
