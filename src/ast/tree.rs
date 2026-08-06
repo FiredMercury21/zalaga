@@ -699,6 +699,8 @@ fn parse_match(code: &mut Cursor) -> Result<Expr, ParseError> {
         code.expect(Comma)?;
         code.expect(Newline)?;
     }
+    code.expect(Newline)?;
+    code.expect(Dedent)?;
 
     Ok(code.new_expr(Match { expr, grds }))
 }
@@ -927,9 +929,9 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(code.new_node(StructDec { name, fields }))
 }
 
-fn parse_struct(code: &mut Cursor) -> Result<HashMap<String, Expr>, ParseError> {
+fn parse_struct(code: &mut Cursor) -> Result<Vec<(String, Expr)>, ParseError> {
     code.expect(LSquare)?;
-    let mut fields = HashMap::new();
+    let mut fields = Vec::new();
     loop {
         let field = code.expect_ident_else(|t| StructBadSyntax { found: t })?;
 
@@ -937,7 +939,14 @@ fn parse_struct(code: &mut Cursor) -> Result<HashMap<String, Expr>, ParseError> 
 
         let second = parse_expr(code, 0)?;
 
-        fields.insert(field, second);
+        if fields.iter().any(|(name, _)| name == &field) {
+            return Err(ParseError {
+                err: StructDuplicateField { found: field },
+                span: code.last_idx(),
+            });
+        }
+
+        fields.push((field, second));
 
         match code.next() {
             Some(RSquare) => break,

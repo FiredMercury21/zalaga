@@ -205,7 +205,7 @@ pub enum ExprKind {
     },
     Struct {
         path: Path,
-        fields: HashMap<String, Expr>,
+        fields: Vec<(String, Expr)>,
     },
     Enum {
         path: Path,

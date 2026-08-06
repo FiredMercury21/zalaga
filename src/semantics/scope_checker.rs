@@ -594,8 +594,8 @@ fn scope_expr(table: &mut ScopeTable, expr: &Expr, current: usize) -> Result<(),
             scope_expr(table, base, current)?;
         }
         Struct { path, fields } => {
-            for field in fields {
-                scope_expr(table, field.1, current)?;
+            for (_, field_expr) in fields {
+                scope_expr(table, field_expr, current)?;
             }
             // TODO: Easier, check structdec and see if all fields exist.
             // Or is that init checker responsibility?
