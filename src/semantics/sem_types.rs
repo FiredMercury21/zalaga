@@ -1,5 +1,5 @@
 use crate::ast::ast_types::*;
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prim {
@@ -14,7 +14,7 @@ pub enum Prim {
     //String, // TODO:
     Void,
     Never,
-    Ref(Box<TypeType>),
+    Ref(Box<TypeKind>),
 }
 
 impl Prim {
@@ -38,73 +38,94 @@ impl Prim {
     }
 }
 
+impl std::fmt::Display for Prim {
+    fn fmt<'a>(&self, f: &mut std::fmt::Formatter<'a>) -> std::fmt::Result {
+        use Prim::*;
+        let text = match self {
+            Char => "char",
+            Int16 => "short",
+            Int32 => "int",
+            Int64 => "long",
+            Float16 => "half",
+            Float32 => "float",
+            Float64 => "double",
+            Bool => "bool",
+            //String, // TODO:
+            Void => "void",
+            Never => "never",
+            Ref(r) => &format!("&{}", *r),
+        };
+        write!(f, "{}", text)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeType {
+pub enum TypeKind {
     Prim(Prim),
     //Array(Box<Type>), // Pointers bby!
     Struct(Struct),
     Enum(Enum),
-    Module(Module),
     Fn { args: Vec<Type>, ret: Box<Type> },
+    Infer,
 }
 
 // Sometimes clashes with ast_types::NodeType::Type
 #[derive(Debug, Clone, PartialEq)]
 pub struct Type {
-    pub ty: TypeType,
+    pub ty: TypeKind,
     pub size: u32, // Bytes. Problems if more than a couple GB?
 }
 
-// self::Module clashes with ast_types::NodeType::Module.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Module {
-    pub name: String,
-    pub table: ScopeTable,
-}
-
-// self::{Struct, Enum} have clashes with ast_types::ExprType::{Struct, Enum}.
+// self::{Struct, Enum} have clashes with ast_types::ExprKind::{Struct, Enum}.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Struct {
     pub name: String,
-    pub fields: Vec<(String, Type, u32)>, // (name, type, byte offset)
+    pub fields: Vec<(String, Type, u32)>, // (name, type, byte offset).
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Enum {
     pub name: String,
-    pub variants: Vec<(String, Option<Type>)>,
+    pub variants: Vec<(String, Option<Type>)>, // HashMap?
 }
 
 impl Type {
     pub fn void() -> Self {
         Self {
-            ty: TypeType::Prim(Prim::Void),
+            ty: TypeKind::Prim(Prim::Void),
             size: 0,
         }
     }
 
     pub fn never() -> Self {
         Self {
-            ty: TypeType::Prim(Prim::Never),
+            ty: TypeKind::Prim(Prim::Never),
+            size: 0,
+        }
+    }
+
+    pub fn infer() -> Self {
+        Self {
+            ty: TypeKind::Infer,
             size: 0,
         }
     }
 
     pub fn is_void(&self) -> bool {
-        matches!(self.ty, TypeType::Prim(Prim::Void))
+        matches!(self.ty, TypeKind::Prim(Prim::Void))
     }
 
     pub fn is_never(&self) -> bool {
-        matches!(self.ty, TypeType::Prim(Prim::Never))
+        matches!(self.ty, TypeKind::Prim(Prim::Never))
     }
 
     pub fn is_ref(&self) -> bool {
-        matches!(self.ty, TypeType::Prim(Prim::Ref(_)))
+        matches!(self.ty, TypeKind::Prim(Prim::Ref(_)))
     }
 
     pub fn is_num(&self) -> bool {
         use self::Prim::*;
-        use TypeType::*;
+        use TypeKind::*;
         matches!(
             self.ty,
             Prim(Char | Bool | Int16 | Int32 | Int64 | Float16 | Float32 | Float64)
@@ -113,12 +134,33 @@ impl Type {
 
     pub fn is_float(&self) -> bool {
         use self::Prim::*;
-        use TypeType::*;
+        use TypeKind::*;
         matches!(self.ty, Prim(Float16 | Float32 | Float64))
     }
 }
 
-impl TypeType {
+impl From<Prim> for Type {
+    fn from(prim: Prim) -> Self {
+        let size = prim.size_prim();
+        Type {
+            ty: TypeKind::Prim(prim),
+            size: size,
+        }
+    }
+}
+
+impl From<&Constant> for Prim {
+    fn from(constant: &Constant) -> Self {
+        match constant {
+            Constant::Num(_) => Prim::Int64,
+            Constant::Float(_) => Prim::Float64,
+            Constant::Bool(_) => Prim::Bool,
+            Constant::Char(_) => Prim::Char,
+        }
+    }
+}
+
+impl TypeKind {
     pub fn to_type(self) -> Type {
         let size = self.size_type();
         Type { ty: self, size }
@@ -126,7 +168,7 @@ impl TypeType {
 
     // Size of a type in bytes.
     fn size_type(&self) -> u32 {
-        use TypeType::*;
+        use TypeKind::*;
 
         match self {
             Prim(prim) => prim.size_prim(),
@@ -149,23 +191,44 @@ impl TypeType {
                     + 1 // One byte for the variant index. Needed?
             }
             Fn { .. } => 8, // Function pointers???
-            Module(_) => 0, // Not sized.
+            Infer => 0,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeCheckError {
-    pub ty: TypeCheckErrorKind,
-    pub location: Span,
+impl std::fmt::Display for TypeKind {
+    fn fmt<'a>(&self, f: &mut fmt::Formatter<'a>) -> std::fmt::Result {
+        use TypeKind::*;
+        let text = match self {
+            Prim(p) => &format!("{}", p),
+            Struct(s) => &s.name,
+            Enum(e) => &e.name,
+            Fn { args, ret } => {
+                let args_vec = args
+                    .iter()
+                    .map(|t| format!("{}, ", t.ty))
+                    .collect::<String>();
+                let stripped = args_vec.strip_suffix(", ").unwrap_or("");
+                &format!("fn {{ args: ({}); return: ({})}}", stripped, ret.ty)
+            }
+            Infer => "infer",
+        };
+        write!(f, "{}", text)
+    }
 }
 
+/*---Type Checker---*/
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeCheckError {
+    pub err: TypeCheckErrorKind,
+    pub span: Span,
+}
+
+// A bit confused about this. Aren't a lot of these
+// supposed to be in the Scope Checker?
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeCheckErrorKind {
-    ExpectedType {
-        expected: Type,
-        actual: Type,
-    },
     FnNotFound {
         name: String,
     },
@@ -207,28 +270,35 @@ pub enum TypeCheckErrorKind {
     DerefOnNonRef {
         ty: Type,
     },
-    ErrorInModule {
+    ErrInModule {
         err: Box<TypeCheckError>,
         mod_name: String,
     },
+    FnArgCountMismatch {
+        path: Path,
+        expected: usize,
+        actual: usize,
+    },
 }
 
-// #[derive(Debug, Clone, PartialEq)]
-// pub struct ScopeError {
-//     pub kind: ScopeErrorKind,
-//     pub location: Span,
-// }
+/*---Scope Checker---*/
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ScopeError {
+pub struct ScopeError {
+    pub kind: ScopeErrorKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScopeErrorKind {
     UndefinedType {
-        name: String,
+        path: Path,
     },
     UndefinedVar {
-        name: String,
+        path: Path,
     },
     UndefinedFn {
-        name: String,
+        path: Path,
     },
     UndefinedField {
         field: String,
@@ -244,6 +314,9 @@ pub enum ScopeError {
         err: Box<ScopeError>,
         mod_name: String,
     },
+    RecursiveType {
+        ty: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -256,12 +329,10 @@ pub struct Scope {
     pub node: Id,
 }
 
-pub struct InitializedVars(pub std::collections::HashSet<String>);
-
 // Flat vector-tree. Why this now, instead of the box approach earlier?
 // Because I was dumb earlier, fuck you.
 // Man, would be easier if I could just access nodes as usize.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ScopeTable {
     pub scopes: Vec<Scope>,             // indexed by scope id
     pub node_scope: HashMap<Id, usize>, // node id -> scope id
@@ -287,13 +358,6 @@ impl Scope {
 }
 
 impl ScopeTable {
-    pub fn new() -> Self {
-        Self {
-            scopes: Vec::new(),
-            node_scope: HashMap::new(),
-        }
-    }
-
     // Adds a new scope to the table and associates it with given node ID.
     pub fn new_scope(&mut self, parent: Option<usize>, id: Id) -> usize {
         self.scopes.push(Scope::new(parent, id));
@@ -302,51 +366,52 @@ impl ScopeTable {
         idx
     }
 
-    fn find_in_scope(&self, path: &Path, current: usize, ty: ScopeType) -> Option<&Type> {
+    fn find_in_scope(&self, path: &Path, current: usize, ty: ScopeType) -> Option<Type> {
         let mut current_id = current;
         let mut current_scope = &self.scopes[current_id];
-        if path.is_module_path() {
-            for segment in &path.0 {
-                if let Some(module_scope) = self.get_module(&segment, current_id) {
-                    current_scope = &module_scope.scopes[0];
-                } else {
-                    return None;
-                }
+
+        // If not module, this is skipped.
+        for segment in path.module_path() {
+            if let Some(module_scope) = self.get_module(&segment, current_id) {
+                current_scope = &module_scope.scopes[0];
+            } else {
+                return None;
             }
         }
+
         loop {
-            let name = &path.base();
+            let name = &path.base().to_string();
             match ty {
                 ScopeType::Vars => {
                     if current_scope.vars.contains_key(name) {
-                        return Some(&current_scope.vars[name]);
+                        return Some(current_scope.vars[name].clone());
                     }
                 }
                 ScopeType::Types => {
                     if current_scope.types.contains_key(name) {
-                        return Some(&current_scope.types[name]);
+                        return Some(current_scope.types[name].clone());
                     }
                 }
                 ScopeType::Functions => {
                     if current_scope.functions.contains_key(name) {
-                        return Some(&current_scope.functions[name]);
+                        return Some(current_scope.functions[name].clone());
                     }
                 }
             }
-            // Go to parent scope.
+            // Go to parent scope. Return None if at root.
             current_id = current_scope.parent?;
             current_scope = &self.scopes[current_id];
         }
     }
 
     // Checks scope and all parent scopes to see if the fn/var/type is defined.
-    pub fn get_var(&self, path: &Path, current: usize) -> Option<&Type> {
+    pub fn get_var(&self, path: &Path, current: usize) -> Option<Type> {
         self.find_in_scope(path, current, ScopeType::Vars)
     }
-    pub fn get_type(&self, path: &Path, current: usize) -> Option<&Type> {
+    pub fn get_type(&self, path: &Path, current: usize) -> Option<Type> {
         self.find_in_scope(path, current, ScopeType::Types)
     }
-    pub fn get_fn(&self, path: &Path, current: usize) -> Option<&Type> {
+    pub fn get_fn(&self, path: &Path, current: usize) -> Option<Type> {
         self.find_in_scope(path, current, ScopeType::Functions)
     }
 
@@ -363,4 +428,30 @@ impl ScopeTable {
             }
         }
     }
+
+    pub fn get_module_scope(&self, name: &str, current: usize) -> Option<usize> {
+        let mut current_idx = current;
+        loop {
+            if self.scopes[current_idx].modules.contains_key(name) {
+                return Some(current_idx);
+            }
+            // Go to parent scope.
+            match self.scopes[current_idx].parent {
+                Some(parent) => current_idx = parent,
+                None => return None,
+            }
+        }
+    }
+}
+
+/*---Flow Graph---*/
+
+pub struct FlowError {
+    pub err: FlowErrorKind,
+    pub span: Span,
+}
+
+pub enum FlowErrorKind {
+    UnreachableCode,
+    UninitializedVar { name: String },
 }
