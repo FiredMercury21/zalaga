@@ -1,4 +1,5 @@
 use super::ast_types::*;
+use std::path::PathBuf;
 
 use crate::utils::PeekExt;
 
@@ -8,8 +9,9 @@ use crate::utils::PeekExt;
 struct FilePos(usize);
 
 impl FilePos {
-    fn span(&mut self, interval: usize) -> Span {
+    fn span(&mut self, interval: usize, source: &PathBuf) -> Span {
         let span = Span {
+            source: Path::from(source.clone()),
             start: self.0,
             end: self.0 + interval,
         };
@@ -46,7 +48,7 @@ fn split_once(arr: &[Token], pred: impl FnMut(&Token) -> bool) -> (&[Token], &[T
 
 /*---Lexer---*/
 
-pub fn tokenize_code(code: &str) -> Vec<Token> {
+pub fn tokenize_code(code: &str, source: &PathBuf) -> Vec<Token> {
     use Operator::*;
     use TokType::*;
 
@@ -57,7 +59,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
     let cleaned = conv_code_ws(code);
     let look = &mut cleaned.chars().peekable();
     let mut toks = Vec::new();
-    let mut interval = 0;
+    let mut interval;
     let mut cursor = FilePos::default();
 
     while let Some(c) = look.next() {
@@ -249,7 +251,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                     }
                     _ => {
                         interval = 1;
-                        Op(Neg)
+                        Op(Not)
                     }
                 },
 
@@ -330,7 +332,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 }
             },
 
-            index: cursor.span(interval),
+            index: cursor.span(interval, source),
         });
     }
 
@@ -361,7 +363,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
                 .1
                 .get(0)
                 .map(|tok| tok.index.clone())
-                .unwrap_or(cursor.span(0));
+                .unwrap_or(cursor.span(0, source));
             for i in 0..indent_delta.unsigned_abs() {
                 // To make spans work, we copy from actual line.
                 indents.push(if indent_delta > 0 {
@@ -397,7 +399,7 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
         index: output
             .last()
             .map(|tok| tok.index.clone())
-            .unwrap_or(cursor.span(0)),
+            .unwrap_or(cursor.span(0, source)),
     });
 
     output
@@ -409,29 +411,34 @@ pub fn tokenize_code(code: &str) -> Vec<Token> {
 mod tests {
     use super::*;
 
+    fn check(code: &str, source: &PathBuf) {
+        let tokenized = tokenize_code(code, source);
+        println!("Tokens of test {:?}:\n", source);
+        println!("{:#?}\n", tokenized);
+    }
+
     #[test]
     fn test_print_toks() {
-        let code = " \t \t ident stuff 323 |||| ((\"))({},, : \n\".  tsrtsr\"tes\"t 32 >= 15";
-        let tokenized = tokenize_code(code);
-        println!("Tokens:\n");
-        println!("{:#?}\n", tokenized);
+        let code = " \t \t     ident stuff 323 |||| ((\"))({},, : \n\".  tsrtsr\"tes\"t 32 >= 15";
+        check(code, &PathBuf::from("test.zg"));
     }
 
     #[test]
     fn test_tok_string() {
         let code = "\"Hello! Single string.\" \"This is a multi-line string\n, see?\"";
-        let tokenized = tokenize_code(code);
-        println!("Tokens:\n");
-        println!("{:#?}\n", tokenized);
+        check(code, &PathBuf::from("test.zg"));
+    }
+
+    #[test]
+    fn test_empty() {
+        let code = "";
+        assert!(tokenize_code(code, &PathBuf::from("test.zg")).is_empty());
     }
 
     #[test]
     fn test_quicksort_tok() {
-        use std::fs::File;
-        use std::io::prelude::*;
-        let mut file = File::open("./examples/quicksort.zg").unwrap();
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).unwrap();
-        println!("{:#?}", tokenize_code(&contents));
+        use crate::cli::utils::load_file;
+        let code = load_file(&"quicksort.zg".parse().unwrap()).expect("Bad file.");
+        check(&code, &PathBuf::from("quicksort.zg"));
     }
 }

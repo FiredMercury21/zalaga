@@ -1,6 +1,8 @@
 use super::ast_types::*;
 use super::ast_types::{ExprKind::*, NodeKind::*, TokType::*};
+use crate::diagnostics::PathCache;
 use ParseErrorKind::*;
+use std::collections::HashMap;
 
 /*---Types---*/
 
@@ -8,14 +10,15 @@ use ParseErrorKind::*;
 // I wanted to use an iterator but there's a
 // couple times we need to go back.
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Cursor {
+#[derive(Debug, PartialEq)]
+pub struct Cursor<'a> {
     pub stream: Vec<Token>,
     pub pos: usize,
     pub node_id: Id,
+    pub cache: &'a mut PathCache,
 }
 
-impl Iterator for Cursor {
+impl<'a> Iterator for Cursor<'a> {
     type Item = TokType;
     fn next(&mut self) -> Option<TokType> {
         let ret = self
@@ -27,7 +30,7 @@ impl Iterator for Cursor {
     }
 }
 
-impl Cursor {
+impl<'a> Cursor<'a> {
     pub fn peek(&self) -> Option<TokType> {
         self.stream
             .get(self.pos)
@@ -35,7 +38,7 @@ impl Cursor {
     }
 
     pub fn last_idx(&self) -> Span {
-        // Ideally there should be checks on empty streams.
+        // Empty streams should be handled before Cursor is created.
         // Usually we use this function after we read a bad token.
         match self.stream.get(self.pos - 1) {
             Some(tok) => tok.index.clone(),
@@ -52,8 +55,8 @@ impl Cursor {
     pub fn expect(&mut self, expected: TokType) -> Result<(), ParseError> {
         match self.next() {
             Some(token) if token == expected => Ok(()),
-            _ => Err(ParseError {
-                err: ParseErrorKind::InvalidSyntax,
+            t => Err(ParseError {
+                err: ParseErrorKind::InvalidSyntax { found: t },
                 span: self.last_idx(),
             }),
         }
@@ -63,12 +66,12 @@ impl Cursor {
     pub fn expect_else(
         &mut self,
         expected: TokType,
-        error: ParseErrorKind,
+        error: impl FnOnce(Option<TokType>) -> ParseErrorKind,
     ) -> Result<(), ParseError> {
         match self.next() {
             Some(token) if token == expected => Ok(()),
-            _ => Err(ParseError {
-                err: error,
+            t => Err(ParseError {
+                err: error(t),
                 span: self.last_idx(),
             }),
         }
@@ -78,19 +81,22 @@ impl Cursor {
     pub fn expect_ident(&mut self) -> Result<String, ParseError> {
         match self.next() {
             Some(Ident(ident)) => Ok(ident),
-            _ => Err(ParseError {
-                err: ParseErrorKind::InvalidSyntax,
+            t => Err(ParseError {
+                err: ParseErrorKind::InvalidSyntax { found: t },
                 span: self.last_idx(),
             }),
         }
     }
 
     /// Expect an Ident token, return it as a String, else err with given error.
-    pub fn expect_ident_else(&mut self, error: ParseErrorKind) -> Result<String, ParseError> {
+    pub fn expect_ident_else(
+        &mut self,
+        error: impl FnOnce(Option<TokType>) -> ParseErrorKind,
+    ) -> Result<String, ParseError> {
         match self.next() {
             Some(Ident(ident)) => Ok(ident),
-            _ => Err(ParseError {
-                err: error,
+            t => Err(ParseError {
+                err: error(t),
                 span: self.last_idx(),
             }),
         }
@@ -121,60 +127,52 @@ pub struct ParseError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseErrorKind {
-    BadDeref,
-    BadRef,
-    BadAtom,
-    BadExpr,
-    BadPath,
-    BadPattern,
+    BadExpr { found: Option<TokType> },
+    BadPath { found: Option<TokType> },
+    BadNum { found: String },
+    BadFloat { found: String },
+    BadPattern { found: Option<TokType> },
+    BadNegation { found: Option<TokType> },
     FnNoRetType,
     FnNoParen,
     FnNoName,
     FnNoBody,
-    FnBadArg,
-    FnSyntax,
+    FnBadArg { found: Option<TokType> },
+    FnSyntax { found: Option<TokType> },
     FnNoCloseBrack,
     VarNoType,
     VarNoName,
+    VarNoAnnotation,
     ForNoInit,
     ForNoPred,
     ForNoBlock,
     WhileNoBlock,
-    AsnBadSyntax,
+    AsnBadSyntax { found: Option<TokType> },
     EnumNoBlock,
-    EnumBadSyntax,
-    EnumDuplicateVariant,
+    EnumBadSyntax { found: Option<TokType> },
+    EnumDuplicateVariant { found: String },
     StructNoBlock,
-    StructBadSyntax,
+    StructBadSyntax { found: Option<TokType> },
     StructNoFieldInit,
-    StructDuplicateField,
-    BadType,
-    UnionNoBlock,
-    UnionBadSyntax,
+    StructDuplicateField { found: String },
+    BadType { found: Option<TokType> },
     IfNoBlock,
-    BlockParseErr,
-    ExprParseErr,
+    BlockParseErr { found: Option<TokType> },
+    ExprParseErr { found: Option<TokType> },
     UnclosedBrack,
-    InvalidKeyword,
-    InvalidField,
-    ModuleAccessWithoutField,
-    ModuleNotFound,
+    InvalidKeyword { found: Option<TokType> },
+    InvalidField { found: Option<TokType> },
+    ModuleNotFound { found: Path },
     ImportNoName,
     ImportNoAlias,
-    InvalidSyntax,
+    ErrInModule { path: Path, err: Box<ParseError> },
+    InvalidSyntax { found: Option<TokType> },
     UnexpectedEof,
-    ScopeError,
     EmptyFile,
     Generic,
 }
 
 /*---Helper functions---*/
-
-impl Spanned for ParseError {
-    fn span(&self) -> Span {
-        self.span.clone()
-    }
-}
 
 // String to binary operator
 fn is_bin_op(op: &Operator) -> bool {
@@ -260,9 +258,9 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
             code.new_node(Statement { expr })
         }
 
-        _ => {
+        t => {
             return Err(ParseError {
-                err: InvalidKeyword,
+                err: InvalidKeyword { found: t },
                 span: code.last_idx(),
             });
         }
@@ -271,11 +269,26 @@ fn match_to_parse(code: &mut Cursor) -> Result<Node, ParseError> {
 
 /*---Parsers---*/
 
-pub fn parse_file(code: Vec<Token>, name: &str) -> Result<Node, ParseError> {
+pub fn parse_file(
+    code: Vec<Token>,
+    source: &str,
+    cache: &mut PathCache,
+) -> Result<Node, ParseError> {
+    if code.is_empty() {
+        return Err(ParseError {
+            err: ParseErrorKind::EmptyFile,
+            span: Span {
+                source: Path::from(source),
+                start: 0,
+                end: 0,
+            },
+        });
+    }
     let mut cursor = Cursor {
         stream: code,
         pos: 0,
         node_id: Id(0),
+        cache,
     };
 
     let mut global = Vec::new();
@@ -295,7 +308,7 @@ pub fn parse_file(code: Vec<Token>, name: &str) -> Result<Node, ParseError> {
     }
 
     Ok(cursor.new_node(Module {
-        name: name.to_owned(),
+        name: source.to_owned(),
         global,
     }))
 }
@@ -332,8 +345,8 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     // fn name(arg1: type, arg2: type) -> ret_type {  }
 
     code.expect_ident()?; // Should never err.
-    let name = code.expect_ident_else(FnNoName)?;
-    code.expect_else(LBrack, FnNoParen)?;
+    let name = code.expect_ident_else(|_| FnNoName)?;
+    code.expect_else(LBrack, |_| FnNoParen)?;
 
     let mut args = Vec::new();
     loop {
@@ -341,7 +354,7 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
             break;
         }
         let arg = code.expect_ident()?;
-        code.expect_else(Colon, VarNoType)?;
+        code.expect_else(Colon, |_| VarNoType)?;
         let var_type = Box::new(parse_type(code)?);
 
         args.push(code.new_node(VarDec {
@@ -356,8 +369,8 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         }
     }
 
-    code.expect_else(RBrack, FnNoParen)?;
-    code.expect_else(Arrow, FnNoRetType)?;
+    code.expect_else(RBrack, |_| FnNoParen)?;
+    code.expect_else(Arrow, |_| FnNoRetType)?;
 
     let Ok(ret_type) = parse_type(code) else {
         return Err(ParseError {
@@ -367,8 +380,8 @@ fn parse_fn_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     };
     let ret_type = Box::new(ret_type);
 
-    code.expect_else(Colon, FnNoRetType)?;
-    code.expect_else(Newline, FnSyntax)?;
+    code.expect_else(Colon, |_| FnNoRetType)?;
+    code.expect_else(Newline, |t| FnSyntax { found: t })?;
 
     let body = parse_block(code)?;
 
@@ -385,14 +398,31 @@ fn parse_var_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     // var name: type = stuff
 
     code.expect_ident()?;
-    let name = code.expect_ident_else(VarNoName)?;
-    code.expect_else(Colon, VarNoType)?;
-    let var_type = Box::new(parse_type(code)?);
+    let name = code.expect_ident_else(|_| VarNoName)?;
 
+    let infer_type: bool;
+    let var_type = if matches!(code.peek(), Some(Colon)) {
+        infer_type = false;
+        code.expect(Colon)?;
+        Box::new(parse_type(code)?)
+    } else {
+        infer_type = true;
+        Box::new(code.new_node(Type {
+            name: TypeNode::Infer,
+        }))
+    };
     let expr = if let Some(Op(Operator::Assign)) = code.peek() {
         code.next();
         Some(parse_expr(code, 0)?)
     } else {
+        // Can't infer type if no expr.
+        if infer_type {
+            return Err(ParseError {
+                err: VarNoAnnotation,
+                span: code.last_idx(),
+            });
+        }
+
         None
     };
 
@@ -417,15 +447,15 @@ fn parse_fn_args(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
             Some(Comma) => {
                 code.next();
             }
-            _ => {
+            t => {
                 return Err(ParseError {
-                    err: FnBadArg,
+                    err: FnBadArg { found: t },
                     span: code.last_idx(),
                 });
             }
         }
     }
-    code.expect_else(RBrack, FnNoCloseBrack)?;
+    code.expect_else(RBrack, |_| FnNoCloseBrack)?;
 
     Ok(args)
 }
@@ -439,11 +469,14 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
 
     // This is a tough one. Expressions can be recursive.
 
-    let Some(token) = code.next() else {
-        return Err(ParseError {
-            err: ExprParseErr,
-            span: code.last_idx(),
-        });
+    let token = match code.next() {
+        Some(token) => token,
+        None => {
+            return Err(ParseError {
+                err: UnexpectedEof,
+                span: code.last_idx(),
+            });
+        }
     };
     let mut current = match token {
         // Constant numbers.
@@ -462,7 +495,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         // Bracketed expressions.
         LBrack => {
             let expr = parse_expr(code, 0)?;
-            code.expect_else(RBrack, UnclosedBrack)?;
+            code.expect_else(RBrack, |_| UnclosedBrack)?;
             expr
         }
 
@@ -470,22 +503,17 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         LSquirl | Indent => parse_block(code)?,
 
         // Unary operators.
+        // Both unary operators and Sub (negative) parse at precedence 20, higher than
+        // most other operators, ensuring proper binding. I think. Should it be 21?
         Op(op) if is_un_op(&op) => {
-            let expr = Box::new(parse_expr(code, 0)?);
+            let expr = Box::new(parse_expr(code, 20)?);
             code.new_expr(UnOp { op, expr })
         }
 
-        // Negative numbers?
+        // Negative numbers.
+        // We change 'Sub' to 'Neg' here.
         Op(Operator::Sub) => {
-            let Some(TokType::Num(x)) = code.next() else {
-                return Err(ParseError {
-                    err: BadNegation,
-                    span: code.last_idx(),
-                });
-            };
-            let expr = Box::new(code.new_expr(Const {
-                val: Constant::Num(x.parse().unwrap()),
-            }));
+            let expr = Box::new(parse_expr(code, 20)?);
             code.new_expr(UnOp {
                 op: Operator::Neg,
                 expr,
@@ -556,9 +584,9 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
             }
         }
 
-        _ => {
+        t => {
             return Err(ParseError {
-                err: BadExpr,
+                err: BadExpr { found: Some(t) },
                 span: code.last_idx(),
             });
         }
@@ -568,7 +596,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
         // Field access. Duplicates parse_atom, because that doesn't work on structs. Refactor?
         if matches!(code.peek(), Some(Period)) {
             code.next();
-            let field = code.expect_ident_else(InvalidField)?;
+            let field = code.expect_ident_else(|t| InvalidField { found: t })?;
             current = code.new_expr(Field {
                 base: Box::new(current),
                 field,
@@ -606,14 +634,14 @@ fn parse_for(code: &mut Cursor) -> Result<Node, ParseError> {
 
     // var i: int = 0; i < 12; ++i
     let init = Box::new(parse_var_dec(code)?);
-    code.expect_else(SColon, ForNoInit)?;
+    code.expect_else(SColon, |_| ForNoInit)?;
     let pred = parse_expr(code, 0)?;
-    code.expect_else(SColon, ForNoPred)?;
+    code.expect_else(SColon, |_| ForNoPred)?;
     let then = parse_expr(code, 0)?;
 
     // ):
-    code.expect_else(RBrack, UnclosedBrack)?;
-    code.expect_else(Colon, ForNoBlock)?;
+    code.expect_else(RBrack, |_| UnclosedBrack)?;
+    code.expect_else(Colon, |_| ForNoBlock)?;
 
     let block = parse_block(code)?;
 
@@ -629,7 +657,7 @@ fn parse_while(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
 
     let pred = parse_expr(code, 0)?;
-    code.expect_else(Colon, WhileNoBlock)?;
+    code.expect_else(Colon, |_| WhileNoBlock)?;
     let block = parse_block(code)?;
 
     Ok(code.new_node(While { pred, block }))
@@ -644,6 +672,7 @@ fn parse_match(code: &mut Cursor) -> Result<Expr, ParseError> {
 
     let mut grds = Vec::new();
     loop {
+        // Don't like this generic break thingy.
         if Some(Guard) != code.peek() {
             break;
         }
@@ -651,13 +680,16 @@ fn parse_match(code: &mut Cursor) -> Result<Expr, ParseError> {
         let patt = parse_pattern(code)?;
         code.expect(Arrow)?;
 
-        // We make the expr a block because it has its own scope.
-        let then_expr = parse_expr(code, 0)?;
-        let block_scope = vec![code.new_node(NodeKind::Statement { expr: then_expr })];
-        let expr = code.new_expr(Block { lines: block_scope });
+        // I don't like this. Generic expression, but has its own scope.
+        // Only blocks are supposed to have own scopes? Idk.
+        let expr = parse_expr(code, 0)?;
 
         grds.push(code.new_node(NodeKind::Guard { patt, expr }));
-        // Comma? Does expr consume last token?
+        // Weird. If no trailing comma, break.
+        if code.peek() == Some(Newline) {
+            break;
+        }
+        code.expect(Comma)?;
         code.expect(Newline)?;
     }
 
@@ -676,8 +708,8 @@ fn parse_pattern(code: &mut Cursor) -> Result<Pattern, ParseError> {
             // Variant
             Some(LBrack) => {
                 code.next();
-                let payload = code.expect_ident_else(BadPattern)?;
-                code.expect_else(RBrack, BadPattern)?;
+                let payload = code.expect_ident_else(|t| BadPattern { found: t })?;
+                code.expect_else(RBrack, |t| BadPattern { found: t })?;
                 Pattern::Variant { name: var, payload }
             }
 
@@ -687,10 +719,16 @@ fn parse_pattern(code: &mut Cursor) -> Result<Pattern, ParseError> {
 
         // Values
         Some(Num(num)) => Pattern::Val {
-            val: Constant::Num(num.parse().unwrap()),
+            val: Constant::Num(num.parse().map_err(|_| ParseError {
+                err: BadNum { found: num },
+                span: code.last_idx(),
+            })?),
         },
         Some(Float(num)) => Pattern::Val {
-            val: Constant::Float(num.parse().unwrap()),
+            val: Constant::Float(num.parse().map_err(|_| ParseError {
+                err: BadFloat { found: num },
+                span: code.last_idx(),
+            })?),
         },
         Some(Char(c)) => Pattern::Val {
             val: Constant::Char(c),
@@ -699,9 +737,9 @@ fn parse_pattern(code: &mut Cursor) -> Result<Pattern, ParseError> {
         // All
         Some(Underscore) => Pattern::All,
 
-        _ => {
+        t => {
             return Err(ParseError {
-                err: ParseErrorKind::BadPattern,
+                err: BadPattern { found: t },
                 span: code.last_idx(),
             });
         }
@@ -718,12 +756,24 @@ fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
     use crate::cli::utils::targets::*;
 
     code.expect_ident()?;
-    let module_name = parse_path(code)?;
-    let mod_ast = match ast_path_to_file(module_name.vec()) {
-        Ok(file_str) => build_ast(&file_str, &module_name.base())?,
-        Err(e) => {
+    let module_path = parse_path(code)?;
+    let mod_ast = match ast_path_to_file(&module_path, code.cache) {
+        Ok(file_str) => match build_ast(&file_str, &format!("{}", module_path), code.cache) {
+            Ok(mod_ast) => mod_ast,
+
+            Err(e) => {
+                return Err(ParseError {
+                    err: ParseErrorKind::ErrInModule {
+                        path: module_path.clone(),
+                        err: Box::new(e),
+                    },
+                    span: code.last_idx(),
+                });
+            }
+        },
+        Err(_) => {
             return Err(ParseError {
-                err: ParseErrorKind::ModuleNotFound,
+                err: ModuleNotFound { found: module_path },
                 span: code.last_idx(),
             });
         }
@@ -731,9 +781,9 @@ fn parse_use(code: &mut Cursor) -> Result<Node, ParseError> {
     let root = Box::new(mod_ast);
     let name = if matches!(code.peek(), Some(At)) {
         code.next();
-        code.expect_ident_else(ParseErrorKind::ImportNoAlias)?
+        code.expect_ident_else(|_| ParseErrorKind::ImportNoAlias)?
     } else {
-        module_name.base().to_string()
+        module_path.base().to_string()
     };
     Ok(code.new_node(Use { name, root }))
 }
@@ -753,9 +803,9 @@ fn parse_return(code: &mut Cursor) -> Result<Expr, ParseError> {
 fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
     let name = code.expect_ident()?;
-    code.expect_else(Colon, EnumNoBlock)?;
-    code.expect_else(Newline, EnumNoBlock)?;
-    code.expect_else(Indent, EnumNoBlock)?;
+    code.expect_else(Colon, |_| EnumNoBlock)?;
+    code.expect_else(Newline, |_| EnumNoBlock)?;
+    code.expect_else(Indent, |_| EnumNoBlock)?;
     let mut variants = Vec::new();
     loop {
         let name = code.expect_ident()?;
@@ -763,7 +813,7 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
         // Check for any duplicate variants.
         if variants.iter().any(|v: &EnumVariant| v.name == name) {
             return Err(ParseError {
-                err: EnumDuplicateVariant,
+                err: EnumDuplicateVariant { found: name },
                 span: code.last_idx(),
             });
         }
@@ -791,9 +841,9 @@ fn parse_enum_dec(code: &mut Cursor) -> Result<Node, ParseError> {
                 continue;
             }
 
-            _ => {
+            t => {
                 return Err(ParseError {
-                    err: EnumBadSyntax,
+                    err: EnumBadSyntax { found: t },
                     span: code.last_idx(),
                 });
             }
@@ -807,25 +857,25 @@ fn parse_enum(code: &mut Cursor) -> Result<Option<Box<Expr>>, ParseError> {
     if code.peek() != Some(LSquare) {
         return Ok(None);
     }
-    code.expect_else(LSquare, EnumBadSyntax)?;
+    code.expect_else(LSquare, |t| EnumBadSyntax { found: t })?;
     let payload = Box::new(parse_expr(code, 0)?);
-    code.expect_else(RSquare, EnumBadSyntax)?;
+    code.expect_else(RSquare, |t| EnumBadSyntax { found: t })?;
     Ok(Some(payload))
 }
 
 fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     code.expect_ident()?;
     let name = code.expect_ident()?;
-    code.expect_else(Colon, StructNoBlock)?;
-    code.expect_else(Newline, StructNoBlock)?;
-    code.expect_else(Indent, StructNoBlock)?;
+    code.expect_else(Colon, |_| StructNoBlock)?;
+    code.expect_else(Newline, |_| StructNoBlock)?;
+    code.expect_else(Indent, |_| StructNoBlock)?;
 
     let mut fields = Vec::new();
     loop {
-        let field = code.expect_ident_else(StructBadSyntax)?;
+        let field = code.expect_ident_else(|t| StructBadSyntax { found: t })?;
 
         // Check for any duplicate fields.
-        // Maybe use HashMap instead of Vec?
+        // Maybe use HashSet instead of Vec?
         if fields.iter().any(|f: &Node| {
             let VarDec { name, .. } = f.node.clone() else {
                 unreachable!()
@@ -833,7 +883,7 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
             name == field
         }) {
             return Err(ParseError {
-                err: StructDuplicateField,
+                err: StructDuplicateField { found: field },
                 span: code.last_idx(),
             });
         }
@@ -858,9 +908,9 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
                 continue;
             }
 
-            _ => {
+            t => {
                 return Err(ParseError {
-                    err: StructBadSyntax,
+                    err: StructBadSyntax { found: t },
                     span: code.last_idx(),
                 });
             }
@@ -870,33 +920,26 @@ fn parse_struct_dec(code: &mut Cursor) -> Result<Node, ParseError> {
     Ok(code.new_node(StructDec { name, fields }))
 }
 
-fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
+fn parse_struct(code: &mut Cursor) -> Result<HashMap<String, Expr>, ParseError> {
     code.expect(LSquare)?;
-    let mut fields = Vec::new();
+    let mut fields = HashMap::new();
     loop {
-        let field = code.expect_ident_else(StructBadSyntax)?;
+        let field = code.expect_ident_else(|t| StructBadSyntax { found: t })?;
 
-        let path = Path::from_str(&field);
-        let first = Box::new(code.new_expr(Var { path }));
+        code.expect_else(Op(Operator::Assign), |_| StructNoFieldInit)?;
 
-        code.expect_else(Op(Operator::Assign), StructNoFieldInit)?;
+        let second = parse_expr(code, 0)?;
 
-        let second = Box::new(parse_expr(code, 0)?);
-
-        fields.push(code.new_expr(BinOp {
-            first,
-            op: Operator::Assign,
-            second,
-        }));
+        fields.insert(field, second);
 
         match code.next() {
             Some(RSquare) => break,
 
             Some(Comma) => continue,
 
-            _ => {
+            t => {
                 return Err(ParseError {
-                    err: StructBadSyntax,
+                    err: StructBadSyntax { found: t },
                     span: code.last_idx(),
                 });
             }
@@ -909,7 +952,7 @@ fn parse_struct(code: &mut Cursor) -> Result<Vec<Expr>, ParseError> {
 fn parse_path(code: &mut Cursor) -> Result<Path, ParseError> {
     let mut path = Path::default();
     loop {
-        path.push(code.expect_ident_else(BadPath)?);
+        path.push(code.expect_ident_else(|t| BadPath { found: t })?);
         if matches!(code.peek(), Some(Separator)) {
             code.next();
         } else {
@@ -930,8 +973,8 @@ fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
 
     let pred = Box::new(parse_expr(code, 0)?);
 
-    code.expect_else(Colon, IfNoBlock)?;
-    code.expect_else(Newline, IfNoBlock)?;
+    code.expect_else(Colon, |_| IfNoBlock)?;
+    code.expect_else(Newline, |_| IfNoBlock)?;
 
     let then = Box::new(parse_block(code)?);
 
@@ -939,8 +982,8 @@ fn parse_if(code: &mut Cursor) -> Result<Expr, ParseError> {
         match tok.as_str() {
             "else" => {
                 code.next();
-                code.expect_else(Colon, IfNoBlock)?;
-                code.expect_else(Newline, IfNoBlock)?;
+                code.expect_else(Colon, |_| IfNoBlock)?;
+                code.expect_else(Newline, |_| IfNoBlock)?;
                 Some(Box::new(parse_block(code)?))
             }
             "elif" => Some(Box::new(parse_if(code)?)),
@@ -982,9 +1025,9 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
                             code.next();
                             ref_n += 2
                         }
-                        _ => {
+                        t => {
                             return Err(ParseError {
-                                err: BadType,
+                                err: BadType { found: t },
                                 span: code.last_idx(),
                             });
                         }
@@ -1008,25 +1051,31 @@ fn parse_type(code: &mut Cursor) -> Result<Node, ParseError> {
 mod tests {
     use super::*;
     use crate::ast::lexer::tokenize_code;
+    use crate::cli::utils::ast_path_to_file;
 
     #[test]
     fn test_var_asn() {
         let test = "var my_var: int = 0\nvar vartwo: &stuff";
-        let thing = tokenize_code(test);
-        assert!(parse_file(thing, &"var_asn".to_string()).is_ok());
+        let thing = tokenize_code(test, &std::path::PathBuf::from("test.zg"));
+        let mut cache = PathCache::new();
+        assert!(parse_file(thing, &"var_asn".to_string(), &mut cache).is_ok());
     }
 
     #[test]
     fn test_quicksort_ast() {
-        use std::fs::File;
-        use std::io::prelude::*;
-        let mut file = File::open("./examples/quicksort.zg").unwrap();
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).unwrap();
-        println!(
-            "{:#?}",
-            parse_file(tokenize_code(&contents), &"quicksort".to_string()).unwrap()
+        let mut cache = PathCache::new();
+        let contents = ast_path_to_file(
+            &Path(vec!["examples".to_string(), "quicksort".to_string()]),
+            &mut cache,
+        )
+        .unwrap();
+        assert!(
+            parse_file(
+                tokenize_code(&contents, &std::path::PathBuf::from("quicksort.zg")),
+                "quicksort.zg",
+                &mut cache
+            )
+            .is_ok()
         );
-        assert!(parse_file(tokenize_code(&contents), &"quicksort".to_string()).is_ok());
     }
 }

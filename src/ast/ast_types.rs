@@ -1,4 +1,6 @@
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+use std::collections::HashMap;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Id(pub usize);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +25,7 @@ pub enum Operator {
     And,
 
     // Unary Operators
+    Not,
     Neg,
     Inc,
     Dec,
@@ -69,10 +72,45 @@ pub enum TokType {
     Illegal(char),
 }
 
+impl std::fmt::Display for TokType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
+    pub source: Path,
     pub start: usize,
     pub end: usize,
+}
+
+pub trait Spanned {
+    fn span(&self) -> Span;
+    fn end(&self) -> usize {
+        self.span().end
+    }
+    fn start(&self) -> usize {
+        self.span().start
+    }
+}
+
+// Some Ariadne stuff to make Span work as a Source.
+
+impl ariadne::Span for Span {
+    type SourceId = Path;
+
+    fn source(&self) -> &Self::SourceId {
+        &self.source
+    }
+
+    fn start(&self) -> usize {
+        self.start
+    }
+
+    fn end(&self) -> usize {
+        self.end
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,12 +127,38 @@ pub enum Constant {
     Char(char),
 }
 
+impl std::fmt::Display for Constant {
+    fn fmt<'a>(&self, f: &mut std::fmt::Formatter<'a>) -> std::fmt::Result {
+        use Constant::*;
+        let text = match self {
+            Num(n) => &format!("{}", n),
+            Float(f) => &format!("{}", f),
+            Bool(b) => &format!("{}", b),
+            Char(c) => &format!("'{}'", c),
+        };
+        write!(f, "{}", text)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     All,
     Var { name: String },
     Val { val: Constant },
     Variant { name: String, payload: String },
+}
+
+impl std::fmt::Display for Pattern {
+    fn fmt<'a>(&self, f: &mut std::fmt::Formatter<'a>) -> std::fmt::Result {
+        use Pattern::*;
+        let text = match self {
+            All => "all",
+            Var { name } => &format!("{}", name),
+            Val { val } => &format!("value: ({})", val),
+            Variant { name, payload } => &format!("enum variant: {} -> {}", name, payload),
+        };
+        write!(f, "{}", text)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,7 +194,7 @@ pub enum ExprKind {
     },
     FnCall {
         path: Path,
-        args: Vec<Expr>,
+        args: Vec<Expr>, // Maybe make into HashMap, for named args.
     },
     Const {
         val: Constant,
@@ -141,7 +205,7 @@ pub enum ExprKind {
     },
     Struct {
         path: Path,
-        fields: Vec<Expr>, // Each is a BinOp with Operator::Assign.
+        fields: HashMap<String, Expr>,
     },
     Enum {
         path: Path,
@@ -227,20 +291,67 @@ pub struct EnumVariant {
 pub enum TypeNode {
     Ref(Box<TypeNode>),
     Base(Path),
+    Infer,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Path(pub Vec<String>);
 
-impl Path {
-    pub fn new() -> Self {
-        Self(vec![])
-    }
-
-    pub fn from_str(s: &str) -> Self {
+impl From<&str> for Path {
+    fn from(s: &str) -> Self {
         Self(vec![s.to_string()])
     }
+}
 
+impl From<&String> for Path {
+    fn from(s: &String) -> Self {
+        Self(vec![s.clone()])
+    }
+}
+
+impl From<std::path::PathBuf> for Path {
+    fn from(p: std::path::PathBuf) -> Self {
+        let mut segments: Vec<String> = p
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        if let Some(last) = segments.last_mut() {
+            if let Some(stripped) = last.strip_suffix(".zg") {
+                *last = stripped.to_string();
+            }
+        }
+        Self(segments)
+    }
+}
+
+impl std::fmt::Display for Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.join("::"))
+    }
+}
+
+impl Spanned for Node {
+    fn span(&self) -> Span {
+        self.span.clone()
+    }
+}
+
+impl Spanned for Expr {
+    fn span(&self) -> Span {
+        self.span.clone()
+    }
+}
+
+impl Spanned for Token {
+    fn span(&self) -> Span {
+        self.index.clone()
+    }
+}
+
+impl Path {
     pub fn push(&mut self, name: String) {
         self.0.push(name);
     }
@@ -249,8 +360,8 @@ impl Path {
         self.0.pop();
     }
 
-    pub fn first(&self) -> String {
-        self.0[0].clone()
+    pub fn first(&self) -> &str {
+        &self.0[0]
     }
 
     pub fn pop_first(&mut self) {
@@ -261,258 +372,26 @@ impl Path {
         self.0.len()
     }
 
-    pub fn base(&self) -> String {
-        self.0[self.0.len() - 1].clone()
+    pub fn base(&self) -> &str {
+        &self.0[self.0.len() - 1]
     }
 
-    pub fn fname(&self) -> Option<String> {
-        self.0.get(self.0.len() - 2).cloned()
+    pub fn fname(&self) -> Option<&str> {
+        self.0.get(self.0.len() - 2).map(|s| s.as_str())
     }
 
     pub fn is_module_path(&self) -> bool {
         self.0.len() > 1
     }
 
-    pub fn module_path(&self) -> Vec<String> {
-        self.0[..self.0.len() - 1].to_vec()
+    pub fn module_path(&self) -> Vec<&str> {
+        self.0[..self.0.len() - 1]
+            .iter()
+            .map(|s| s.as_str())
+            .collect()
     }
 
-    pub fn vec(&self) -> Vec<String> {
-        self.0.clone()
+    pub fn vec(&self) -> Vec<&str> {
+        self.0.iter().map(|s| s.as_str()).collect()
     }
 }
-
-// Display.
-/*
-impl std::fmt::Display for Node {
-    pub fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.fmt_indent(f, Vec::new())
-    }
-}
-
-impl Expr {
-
-}
-
-impl Node {
-    fn fmt_indent(&self, f: &mut std::fmt::Formatter<'_>, pipes: Vec<bool>) -> std::fmt::Result {
-        use Node::*;
-
-        let pre = if pipes.is_empty() {
-            "".to_string()
-        } else {
-            pipes.iter().fold(String::new(), |acc, i| {
-                acc + &match i {
-                    3 => "└─",
-                    2 => "├─",
-                    1 => "│ ",
-                    _ => "  ",
-                }
-            })
-        };
-        for i in 0..pipes.len() {
-            if pipes[i] == 3 {
-                pipes[i] = 0;
-            }
-        }
-        write!(f, "{pre}")?;
-        match self {
-            Module { name, root } => {
-                writeln!(f, "Module '{name}'\n{pre}Module root:")?;
-                pipes.push(3);
-                root.fmt_indent(f, pipes)
-            }
-            FnDec {
-                name,
-                args,
-                ret_type,
-                body,
-            } => {
-                writeln!(f, "FnDec '{name}'\n{pre}args:")?;
-                if args.is_empty() {
-                    writeln!(f, "{pre}├─No arguments.")?;
-                } else {
-                    writeln!(f, "{pre}├─args:")?;
-                    pipes.push(2);
-                    for i in 0..(args.len() - 1) {
-                        args[i].fmt_indent(f, pipes)?;
-                    }
-                    pipes.pop();
-                    pipes.push(3);
-                    args[args.len() - 1].fmt_indent(f, pipes)?;
-                }
-                writeln!(f, "{pre}ret_type:")?;
-                ret_type.fmt_indent(f, {
-                    pipes.push(2);
-                    pipes
-                })?;
-                writeln!(f, "{pre}└─body:")?;
-                body.fmt_indent(f, {
-                    pipes.push(3);
-                    pipes
-                })
-            }
-            Block { scope } => {
-                writeln!(f, "Block, scope:")?;
-                pipes.push(2);
-                if scope.is_empty() {
-                    writeln!(f, "{pre}└─No arguments.")
-                } else {
-                    writeln!(f, "{pre}└─args:")?;
-                    pipes.push(2);
-                    for i in 0..(args.len() - 1) {
-                        args[i].fmt_indent(f, pipes)?;
-                    }
-                    pipes.pop();
-                    pipes.push(3);
-                    args[args.len() - 1].fmt_indent(f, pipes)
-                }
-                Ok(())
-            }
-            FnCall { name, args } => {
-                writeln!(f, "FnCall '{name}'")?;
-                if args.is_empty() {
-                    writeln!(f, "{pre}└─No arguments.")
-                } else {
-                    writeln!(f, "{pre}└─args:")?;
-                    pipes.push(2);
-                    for i in 0..(args.len() - 1) {
-                        args[i].fmt_indent(f, pipes)?;
-                    }
-                    pipes.pop();
-                    pipes.push(3);
-                    args[args.len() - 1].fmt_indent(f, pipes)
-                }
-            }
-            Expr { expr } => {
-                writeln!(f, "{pre}Expr:")?;
-                expr.fmt_indent(f, indent + 1)
-            }
-            VarAsn { name, val } => {
-                writeln!(f, "VarAsn '{name}'\n{pre}val:")?;
-                val.fmt_indent(f, indent + 1)
-            }
-            VarDec {
-                name,
-                expr,
-                var_type,
-            } => {
-                writeln!(f, "VarDec '{name}'\n{pre}type:")?;
-                var_type.fmt_indent(f, indent + 1)?;
-                match expr {
-                    Some(expr) => {
-                        writeln!(f, "{pre}val:")?;
-                        expr.fmt_indent(f, indent + 1)
-                    }
-                    None => writeln!(f, "{pre}No initializer."),
-                }
-            }
-            Var { name } => {
-                writeln!(f, "Var '{name}'")
-            }
-            Ref { expr } => {
-                writeln!(f, "Ref:")?;
-                expr.fmt_indent(f, indent + 1)
-            }
-            Deref { expr } => {
-                writeln!(f, "Deref:")?;
-                expr.fmt_indent(f, indent + 1)
-            }
-            Field { base, field } => {
-                writeln!(f, "Field Access, field '{field}' of:")?;
-                base.fmt_indent(f, indent + 1)
-            }
-            StructDec { name, fields } => {
-                writeln!(f, "StructDec '{name}'\n{pre}fields:")?;
-                for node in fields {
-                    node.fmt_indent(f, indent + 1)?;
-                }
-                Ok(())
-            }
-            UnionDec { name, variants } => {
-                writeln!(f, "UnionDec '{name}'\n{pre}variants:")?;
-                for node in variants {
-                    node.fmt_indent(f, indent + 1)?;
-                }
-                Ok(())
-            }
-            EnumDec { name, variants } => {
-                writeln!(f, "EnumDec '{name}'\n{pre}variants:")?;
-                for node in variants {
-                    writeln!(f, "{pre}| {node}")?;
-                }
-                Ok(())
-            }
-            Struct { name, fields } => {
-                writeln!(f, "Struct '{name}'\n{pre}fields:")?;
-                for node in fields {
-                    node.fmt_indent(f, indent + 1)?;
-                }
-                Ok(())
-            }
-            Union { name, variant, val } => {
-                writeln!(f, "Union '{name}', variant '{variant}'\n{pre}value:")?;
-                val.fmt_indent(f, indent + 1)?;
-                Ok(())
-            }
-            Enum { variant } => {
-                writeln!(f, "Enum '{variant}'")?;
-                Ok(())
-            }
-            For {
-                init,
-                pred,
-                then,
-                block,
-            } => {
-                writeln!(f, "For {init:?}\n{pre}pred:")?;
-                pred.fmt_indent(f, indent + 1)?;
-                writeln!(f, "{pre}then:")?;
-                then.fmt_indent(f, indent + 1)?;
-                writeln!(f, "{pre}block:")?;
-                block.fmt_indent(f, indent + 1)
-            }
-            While { pred, block } => {
-                writeln!(f, "While {pred:?}\n{pre}block:")?;
-                block.fmt_indent(f, indent + 1)
-            }
-            If {
-                pred,
-                then,
-                else_block,
-            } => {
-                writeln!(f, "If, pred:")?;
-                pred.fmt_indent(f, indent + 1)?;
-                writeln!(f, "{pre}then:")?;
-                then.fmt_indent(f, indent + 1)?;
-                match else_block {
-                    Some(block) => {
-                        writeln!(f, "{pre}else:")?;
-                        block.fmt_indent(f, indent + 1)
-                    }
-                    None => Ok(()),
-                }
-            }
-            BinOp { first, op, second } => {
-                writeln!(f, "Operator {op:?}\n{pre}first:")?;
-                first.fmt_indent(f, indent + 1)?;
-                writeln!(f, "{pre}second:")?;
-                second.fmt_indent(f, indent + 1)
-            }
-            UnOp { val, op } => {
-                writeln!(f, "Operator {op:?}\n{pre}val:")?;
-                val.fmt_indent(f, indent + 1)
-            }
-            Return { val } => {
-                writeln!(f, "Return\n{pre}val:")?;
-                val.fmt_indent(f, indent + 1)
-            }
-            Const { val } => {
-                writeln!(f, "Const\n{pre}val: {val:?}")
-            }
-
-            _ => writeln!(f, "{self:?}"),
-        }
-    }
-}
-*/
