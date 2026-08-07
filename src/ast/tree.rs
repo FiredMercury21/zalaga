@@ -316,6 +316,8 @@ pub fn parse_file(
 fn parse_block(code: &mut Cursor) -> Result<Expr, ParseError> {
     let mut statements = Vec::new();
 
+    // ERROR: Should this be required?
+    // I'm thinking of squirly braces.
     if let Some(Indent) = code.peek() {
         code.next();
     }
@@ -618,7 +620,7 @@ fn parse_expr(code: &mut Cursor, prec: i32) -> Result<Expr, ParseError> {
 
         // Associativity
         let new_prec = match op {
-            Operator::Assign => op_prec, // Right-associative
+            Operator::Assign | Operator::Exp => op_prec, // Right-associative
             _ => op_prec + 1,
         };
 
